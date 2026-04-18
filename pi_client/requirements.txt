@@ -1,0 +1,8 @@
+Flask==3.0.*
+flask-cors==4.*
+opencv-python-headless==4.10.*
+numpy<2.0
+Pillow==10.*
+PyYAML==6.*
+psutil==5.*
+pytest==8.*

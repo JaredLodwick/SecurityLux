@@ -1,0 +1,39 @@
+# Door Cam Pi Client — example configuration.
+#
+# Copy this file to `config.yml` (same directory) or `/etc/doorcam/config.yml`
+# and edit values to taste. The service picks up config in this order:
+#   1. path in the DOORCAM_CONFIG env var
+#   2. /etc/doorcam/config.yml
+#   3. ./config.yml  (working directory)
+#   4. built-in defaults (shown below)
+
+server:
+  # Bind address. 0.0.0.0 exposes the server on every interface of the Pi.
+  host: 0.0.0.0
+  # TCP port for the Flask HTTP server.
+  port: 5000
+
+camera:
+  # V4L2 device node. `/dev/video0` is the usual first USB UVC webcam.
+  device: /dev/video0
+  # Capture resolution [width, height]. Keep modest on a Pi Zero 2 W.
+  resolution: [640, 480]
+  # Soft cap for capture + encode loop (frames per second).
+  fps: 15
+  # JPEG encoding quality 1-100. Higher = larger frames, more bandwidth.
+  jpeg_quality: 70
+
+feed:
+  # Initial feed state when the service starts: "on" or "off".
+  start_state: off
+
+pisugar:
+  # PiSugar daemon runs locally on the Pi over TCP.
+  host: 127.0.0.1
+  port: 8423
+  # Seconds to wait for any PiSugar socket response before giving up.
+  timeout_seconds: 1.0
+
+logging:
+  # Standard Python logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL.
+  level: INFO

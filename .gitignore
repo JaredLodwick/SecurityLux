@@ -1,0 +1,36 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+pytest-cache-files-*/
+.coverage
+htmlcov/
+.venv/
+venv/
+env/
+
+# Node
+node_modules/
+dist/
+build/
+.next/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# Secrets / local config
+.env
+.env.*
+!.env.example
+config.yml
+config.local.yml
+*.key
+*.pem
+credentials*
