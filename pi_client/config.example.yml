@@ -7,13 +7,16 @@
 #   3. ./config.yml  (working directory)
 #   4. built-in defaults (shown below)
 
-server:
-  # Bind address. 0.0.0.0 exposes the server on every interface of the Pi.
-  host: 0.0.0.0
-  # TCP port for the Flask HTTP server.
-  port: 5000
+hub:
+  # WebSocket URL of the MagicMirror hub. The camera connects out to
+  # <url>/cam/<camera.id>; the hub buffers frames and forwards on/off
+  # commands back over the same socket.
+  url: ws://meer.local:5000
 
 camera:
+  # Stable identifier this camera registers under on the hub. The MM module
+  # config uses the same id to select which camera to display.
+  id: front
   # V4L2 device node. `/dev/video0` is the usual first USB UVC webcam.
   device: /dev/video0
   # Capture resolution [width, height]. Keep modest on a Pi Zero 2 W.
@@ -22,10 +25,6 @@ camera:
   fps: 15
   # JPEG encoding quality 1-100. Higher = larger frames, more bandwidth.
   jpeg_quality: 70
-
-feed:
-  # Initial feed state when the service starts: "on" or "off".
-  start_state: off
 
 pisugar:
   # PiSugar daemon runs locally on the Pi over TCP.

@@ -1,7 +1,7 @@
 """Camera capture layer — real USB webcam plus a mock fallback for dev.
 
 The capture abstraction exposes a single ``CameraManager`` instance that the
-Flask layer can ask for the latest JPEG frame. The manager owns a background
+publisher can ask for the latest JPEG frame. The manager owns a background
 thread which reads frames at a soft fps cap, encodes them to JPEG, and stores
 only the most recent one under a lock (last-writer-wins — no per-client
 queueing, no backpressure).
@@ -9,7 +9,7 @@ queueing, no backpressure).
 If OpenCV can't open the configured V4L2 device (e.g. during laptop
 development) the manager transparently falls back to a synthetic source that
 renders a dark-gray frame with a live timestamp and a frame counter. This lets
-the web UI and MagicMirror module be developed without any hardware.
+the publisher and the MagicMirror hub be developed without any hardware.
 """
 
 from __future__ import annotations

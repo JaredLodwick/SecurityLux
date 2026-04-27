@@ -1,5 +1,5 @@
 [Unit]
-Description=Door Cam Pi Client (MJPEG streamer + control API)
+Description=Door Cam Pi Client (WebSocket publisher to MagicMirror hub)
 After=network-online.target
 Wants=network-online.target
 

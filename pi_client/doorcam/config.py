@@ -25,18 +25,15 @@ import yaml
 log = logging.getLogger(__name__)
 
 DEFAULT_CONFIG: dict[str, Any] = {
-    "server": {
-        "host": "0.0.0.0",
-        "port": 5000,
+    "hub": {
+        "url": "ws://meer.local:5000",
     },
     "camera": {
+        "id": "front",
         "device": "/dev/video0",
         "resolution": [640, 480],
         "fps": 15,
         "jpeg_quality": 70,
-    },
-    "feed": {
-        "start_state": "off",
     },
     "pisugar": {
         "host": "127.0.0.1",

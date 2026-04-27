@@ -1,10 +1,10 @@
 """Door Cam Pi client package.
 
-Runs on a Raspberry Pi Zero 2 W with a USB UVC webcam. Captures frames,
-serves MJPEG over HTTP for LAN viewers, exposes a small control REST API,
-and reports battery state from the PiSugar daemon.
+Runs on a Raspberry Pi Zero 2 W with a USB UVC webcam. Captures frames and
+publishes them over a single WebSocket to the MagicMirror hub, which buffers
+the latest frame and exposes it to viewers (browser, detector workers, etc.).
+
+The publisher entry point is ``doorcam.publisher.run_from_env`` (also reachable
+as ``python -m doorcam``). Submodules are imported lazily so unrelated callers
+(tests, config tools) don't need ``websockets`` or ``opencv`` installed.
 """
-
-from .server import create_app, run_from_env
-
-__all__ = ["create_app", "run_from_env"]

@@ -1,5 +1,4 @@
-Flask==3.0.*
-flask-cors==4.*
+websockets==12.*
 opencv-python-headless==4.10.*
 numpy<2.0
 Pillow==10.*

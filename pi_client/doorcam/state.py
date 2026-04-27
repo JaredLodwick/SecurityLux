@@ -1,6 +1,6 @@
 """Thread-safe on/off state machine for the camera feed.
 
-The Flask route handlers and the capture thread all need a single source of
+The hub-driven publisher and the capture thread both need a single source of
 truth for whether the feed is currently on. ``CameraState`` centralizes that
 and fires registered callbacks whenever the state actually changes, so the
 camera module can open or release the hardware device in response.
