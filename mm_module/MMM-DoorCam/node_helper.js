@@ -2,7 +2,7 @@ const http = require("node:http");
 const url = require("node:url");
 const NodeHelper = require("node_helper");
 const Log = require("logger");
-const { WebSocketServer } = require("ws");
+const WebSocketServer = require("ws").Server;
 
 const MJPEG_BOUNDARY = "frame";
 const STATUS_STALE_MS = 30_000;
