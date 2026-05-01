@@ -52,12 +52,12 @@ module.exports = NodeHelper.create({
 			this.hubPort = cfg.hubPort;
 		}
 		const camId = cfg.camId;
-		if (camId && !this.cams.has(camId)) {
-			this.getCam(camId);
-		}
-		if (camId && cfg.startEnabled === true) {
-			const cam = this.getCam(camId);
-			if (cam.desiredState !== "on") this.setDesiredState(camId, "on");
+		if (!camId) return;
+		this.getCam(camId);
+		if (cfg.startEnabled === false) {
+			this.setDesiredState(camId, "off");
+		} else if (cfg.startEnabled === true) {
+			this.setDesiredState(camId, "on");
 		}
 	},
 
@@ -66,7 +66,7 @@ module.exports = NodeHelper.create({
 		if (!cam) {
 			cam = {
 				id: camId,
-				desiredState: "off",
+				desiredState: "on",
 				lastJpeg: null,
 				lastJpegAt: 0,
 				status: null,
