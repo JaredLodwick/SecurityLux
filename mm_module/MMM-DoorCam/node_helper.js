@@ -123,8 +123,10 @@ module.exports = NodeHelper.create({
 
 		ws.on("message", (data, isBinary) => {
 			cam.lastSeenAt = Date.now();
-			if (isBinary) {
-				cam.lastJpeg = data;
+			const binary = isBinary === true
+				|| (isBinary === undefined && Buffer.isBuffer(data));
+			if (binary) {
+				cam.lastJpeg = Buffer.isBuffer(data) ? data : Buffer.from(data);
 				cam.lastJpegAt = cam.lastSeenAt;
 				cam.frameSeq += 1;
 				return;
