@@ -3,7 +3,7 @@ Module.register("MMM-DoorCam", {
 		camId: "front",
 		hubUrl: "http://meer.local:5000",
 		hubPort: 5000,
-		startEnabled: false,
+		startEnabled: true,
 		hideWhenOff: true,
 		showToggleButton: true,
 		showStatusBar: true,
