@@ -8,7 +8,10 @@ Module.register("MMM-DoorCam", {
 		showToggleButton: true,
 		showStatusBar: true,
 		width: "320px",
-		title: "Door Cam"
+		title: "Door Cam",
+		streamRefreshSeconds: 30,
+		staleFrameMs: 10000,
+		errorRetryMs: 1500
 	},
 
 	start () {
@@ -16,12 +19,21 @@ Module.register("MMM-DoorCam", {
 		this.cameraState = null;
 		this.inFlightToggle = false;
 		this.streamNonce = Date.now();
+		this._refreshTimer = null;
 
 		this.sendSocketNotification("DOORCAM_INIT", {
 			camId: this.config.camId,
 			hubPort: this.config.hubPort,
 			startEnabled: this.config.startEnabled
 		});
+	},
+
+	suspend () {
+		this._stopRefreshTimer();
+	},
+
+	resume () {
+		if (this.cameraState === "on") this._scheduleRefreshTimer();
 	},
 
 	getStyles () {
@@ -34,10 +46,45 @@ Module.register("MMM-DoorCam", {
 		const prevState = this.cameraState;
 		this.status = payload;
 		this.cameraState = payload.state || null;
+		let refreshed = false;
 		if (prevState !== this.cameraState && this.cameraState === "on") {
 			this.streamNonce = Date.now();
+			refreshed = true;
+		}
+		if (!refreshed && this.cameraState === "on" && payload.connected) {
+			const ageMs = payload.last_frame_age_ms;
+			if (typeof ageMs === "number" && isFinite(ageMs) && ageMs > this.config.staleFrameMs) {
+				this.streamNonce = Date.now();
+			}
+		}
+		if (this.cameraState === "on") {
+			this._scheduleRefreshTimer();
+		} else {
+			this._stopRefreshTimer();
 		}
 		this.inFlightToggle = false;
+		this.updateDom();
+	},
+
+	_scheduleRefreshTimer () {
+		const seconds = Number(this.config.streamRefreshSeconds);
+		if (!isFinite(seconds) || seconds <= 0) return;
+		if (this._refreshTimer) return;
+		const intervalMs = Math.max(5, seconds) * 1000;
+		this._refreshTimer = setInterval(() => this._refreshStreamIfOn(), intervalMs);
+	},
+
+	_stopRefreshTimer () {
+		if (this._refreshTimer) {
+			clearInterval(this._refreshTimer);
+			this._refreshTimer = null;
+		}
+	},
+
+	_refreshStreamIfOn () {
+		if (this.cameraState !== "on") return;
+		if (!this.status || !this.status.connected) return;
+		this.streamNonce = Date.now();
 		this.updateDom();
 	},
 
@@ -95,6 +142,10 @@ Module.register("MMM-DoorCam", {
 			img.className = "doorcam-stream";
 			img.alt = "Live door camera feed";
 			img.src = this.streamUrl();
+			img.addEventListener("error", () => {
+				const retryMs = Math.max(250, Number(this.config.errorRetryMs) || 1500);
+				setTimeout(() => this._refreshStreamIfOn(), retryMs);
+			});
 			return img;
 		}
 		const placeholder = document.createElement("div");

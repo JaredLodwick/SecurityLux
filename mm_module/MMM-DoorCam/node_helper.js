@@ -292,7 +292,10 @@ module.exports = NodeHelper.create({
 
 		let lastSeq = -1;
 		let closed = false;
-		req.on("close", () => { closed = true; });
+		const markClosed = () => { closed = true; };
+		req.on("close", markClosed);
+		res.on("close", markClosed);
+		res.on("error", markClosed);
 
 		const tick = () => {
 			if (closed) return;
@@ -306,9 +309,19 @@ module.exports = NodeHelper.create({
 				`--${MJPEG_BOUNDARY}\r\nContent-Type: image/jpeg\r\nContent-Length: ${jpeg.length}\r\n\r\n`,
 				"ascii"
 			);
-			res.write(head);
-			res.write(jpeg);
-			res.write("\r\n");
+			let drained;
+			try {
+				res.write(head);
+				res.write(jpeg);
+				drained = res.write("\r\n");
+			} catch (_) {
+				closed = true;
+				return;
+			}
+			if (drained === false) {
+				res.once("drain", tick);
+				return;
+			}
 			setImmediate(tick);
 		};
 		tick();
