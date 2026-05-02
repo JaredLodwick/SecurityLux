@@ -7,6 +7,10 @@
 # `node_modules` symlink inside the module so Node's require() can find
 # MagicMirror's bundled `ws` and `node_helper` packages when MM loads us.
 #
+# We also install the hub-side detection deps (onnxruntime-node, sharp,
+# better-sqlite3) into MagicMirror's own node_modules so the helper picks them
+# up via the same symlink.
+#
 # Usage:
 #   ./mm_module/install.sh                      # auto-detect ~/MagicMirror
 #   ./mm_module/install.sh /path/to/MagicMirror
@@ -19,6 +23,7 @@ SOURCE_DIR="$SCRIPT_DIR/MMM-DoorCam"
 TARGET_LINK="$MM_ROOT/modules/MMM-DoorCam"
 NODE_MODULES_LINK="$SOURCE_DIR/node_modules"
 MM_NODE_MODULES="$MM_ROOT/node_modules"
+DETECTION_DEPS=(onnxruntime-node sharp better-sqlite3)
 
 if [[ ! -d "$MM_ROOT" ]]; then
     echo "MagicMirror not found at: $MM_ROOT" >&2
@@ -52,5 +57,29 @@ elif [[ -e "$NODE_MODULES_LINK" ]]; then
 fi
 ln -s "$MM_NODE_MODULES" "$NODE_MODULES_LINK"
 echo "linked: $NODE_MODULES_LINK -> $MM_NODE_MODULES"
+
+# Hub-side detection deps. Install into MM's node_modules so our symlink picks
+# them up. Skip the install if all packages are already present (idempotent).
+missing=()
+for pkg in "${DETECTION_DEPS[@]}"; do
+    if [[ ! -d "$MM_NODE_MODULES/$pkg" ]]; then
+        missing+=("$pkg")
+    fi
+done
+if (( ${#missing[@]} > 0 )); then
+    echo "installing detection deps into MagicMirror: ${missing[*]}"
+    ( cd "$MM_ROOT" && npm install --no-audit --no-fund "${missing[@]}" )
+else
+    echo "detection deps already present: ${DETECTION_DEPS[*]}"
+fi
+
+# ffmpeg is used to record per-event clips. Warn (don't fail) if it's missing —
+# detection still runs, sessions just get logged without a clip_path.
+if ! command -v ffmpeg >/dev/null 2>&1; then
+    echo "WARNING: ffmpeg not found on PATH." >&2
+    echo "  Install with: sudo apt-get install -y ffmpeg" >&2
+    echo "  Without ffmpeg, person events are still detected and logged but no" >&2
+    echo "  video clip will be recorded." >&2
+fi
 
 echo "done. Restart MagicMirror to load the module."

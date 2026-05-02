@@ -10,7 +10,28 @@ Module.register("MMM-DoorCam", {
 		title: "Door Cam",
 		streamRefreshSeconds: 30,
 		staleFrameMs: 10000,
-		errorRetryMs: 1500
+		errorRetryMs: 1500,
+		// --- Hub-side person detection + per-event recording. ---
+		// Defaults are off so existing installs don't get a CPU spike
+		// after pulling. Flip `detection.enabled` to true to opt in.
+		detection: {
+			enabled: false,
+			fps: 2,
+			confidence: 0.45,
+			classes: ["person"],
+			modelUrl: "https://github.com/JaredLodwick/DoorCamera/releases/download/models-v1/yolov8n-int8.onnx",
+			modelSha256: ""
+		},
+		recording: {
+			codec: "mkv",            // "mkv" (stream-copy, zero-CPU) | "h264" (libx264 ultrafast)
+			fps: 15,
+			minClipSeconds: 2,
+			maxClipSeconds: 300,
+			graceMs: 1500,
+			retentionDays: 14
+		},
+		clipsRoot: "~/.mm-doorcam/clips",
+		dbPath: "~/.mm-doorcam/events.db"
 	},
 
 	start () {
@@ -22,7 +43,11 @@ Module.register("MMM-DoorCam", {
 
 		this.sendSocketNotification("DOORCAM_INIT", {
 			camId: this.config.camId,
-			hubPort: this.config.hubPort
+			hubPort: this.config.hubPort,
+			detection: this.config.detection,
+			recording: this.config.recording,
+			clipsRoot: this.config.clipsRoot,
+			dbPath: this.config.dbPath
 		});
 	},
 

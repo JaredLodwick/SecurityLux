@@ -1,11 +1,19 @@
 const http = require("node:http");
 const url = require("node:url");
+const fs = require("node:fs");
+const path = require("node:path");
 const NodeHelper = require("node_helper");
 const Log = require("logger");
 const WebSocketServer = require("ws").Server;
 
+const { Store, expandHome } = require("./store");
+const { Detector } = require("./detector");
+const { Recorder } = require("./recorder");
+const { SessionManager } = require("./session");
+
 const MJPEG_BOUNDARY = "frame";
 const STATUS_STALE_MS = 30_000;
+const RETENTION_INTERVAL_MS = 6 * 60 * 60 * 1000;   // 6h
 
 module.exports = NodeHelper.create({
 	start () {
@@ -15,9 +23,42 @@ module.exports = NodeHelper.create({
 		this.server = null;
 		this.wss = null;
 		this.started = false;
+
+		// --- Detection / recording subsystem (off by default until INIT) ---
+		this.detectionCfg = null;
+		this.recordingCfg = null;
+		this.clipsRoot = null;
+		this.dbPath = null;
+		this.store = null;
+		this.detector = null;
+		this.sessionManager = null;
+		this.retentionTimer = null;
+		this.detectionBootPromise = null;
 	},
 
 	stop () {
+		if (this.retentionTimer) {
+			clearInterval(this.retentionTimer);
+			this.retentionTimer = null;
+		}
+
+		// Best-effort graceful shutdown — wait briefly for active sessions to
+		// finalize their clips, then force everything down.
+		const shutdown = (async () => {
+			if (this.sessionManager) {
+				try { await this.sessionManager.forceEndAll("helper-stop"); } catch (_) { /* ignore */ }
+			}
+			if (this.detector) {
+				try { await this.detector.stop(); } catch (_) { /* ignore */ }
+			}
+			if (this.store) {
+				try { this.store.close(); } catch (_) { /* ignore */ }
+			}
+		})();
+		// MagicMirror's stop() isn't awaited; we kick off the async chain and
+		// move on. The 5s SIGINT grace inside Recorder is enough headroom.
+		shutdown.catch(() => { /* ignore */ });
+
 		if (this.wss) {
 			for (const ws of this.wss.clients) {
 				try { ws.terminate(); } catch (_) { /* ignore */ }
@@ -50,6 +91,15 @@ module.exports = NodeHelper.create({
 	applyConfig (cfg) {
 		if (typeof cfg.hubPort === "number" && cfg.hubPort > 0) {
 			this.hubPort = cfg.hubPort;
+		}
+		// First INIT wins for detection config — multiple module instances
+		// (one per cam) all share one hub, so we can't have conflicting
+		// detection configs. The existing helper does the same with hubPort.
+		if (this.detectionCfg === null) {
+			this.detectionCfg = cfg.detection || { enabled: false };
+			this.recordingCfg = cfg.recording || {};
+			this.clipsRoot = cfg.clipsRoot || "~/.mm-doorcam/clips";
+			this.dbPath = cfg.dbPath || "~/.mm-doorcam/events.db";
 		}
 		const camId = cfg.camId;
 		if (!camId) return;
@@ -101,6 +151,82 @@ module.exports = NodeHelper.create({
 		this.server.listen(this.hubPort, () => {
 			Log.info(`[MMM-DoorCam] hub listening on :${this.hubPort}`);
 		});
+
+		// Detection runs alongside the HTTP/WS server. We boot it lazily and
+		// asynchronously so a bad model URL or missing dep can't block the
+		// camera pipeline.
+		if (this.detectionCfg && this.detectionCfg.enabled) {
+			this.detectionBootPromise = this._bootDetection().catch((err) => {
+				Log.error(`[MMM-DoorCam] detection boot failed: ${err && err.message}`);
+			});
+		} else {
+			Log.info("[MMM-DoorCam] detection disabled (set detection.enabled: true to opt in)");
+		}
+	},
+
+	async _bootDetection () {
+		try {
+			this.store = new Store({ dbPath: this.dbPath, logger: Log }).open();
+		} catch (err) {
+			Log.error(`[MMM-DoorCam] failed to open event store: ${err && err.message}`);
+			this.store = null;
+			return;
+		}
+
+		this.sessionManager = new SessionManager({
+			store: this.store,
+			recordingCfg: this.recordingCfg || {},
+			clipsRoot: this.clipsRoot,
+			recorderFactory: (cam, opts) => new Recorder({ cam, ...opts }),
+			getCam: (camId) => this.getCam(camId),
+			logger: Log
+		});
+
+		this.detector = new Detector({
+			detectionCfg: this.detectionCfg,
+			onObservation: (camId, hasPerson, confidence) => {
+				if (this.sessionManager) {
+					this.sessionManager.observe(camId, hasPerson, confidence);
+				}
+			},
+			logger: Log
+		});
+
+		const ok = await this.detector.start();
+		if (!ok) {
+			Log.warn("[MMM-DoorCam] detector did not start; sessions will not be recorded");
+			this.detector = null;
+			return;
+		}
+
+		// Attach any cams already known so they get tick loops immediately.
+		for (const cam of this.cams.values()) {
+			this.detector.attachCam(cam);
+		}
+
+		this._scheduleRetentionSweep();
+	},
+
+	_scheduleRetentionSweep () {
+		if (this.retentionTimer) return;
+		const sweep = () => {
+			if (!this.store) return;
+			try {
+				const result = this.store.retentionSweep({
+					retentionDays: (this.recordingCfg || {}).retentionDays,
+					clipsRoot: this.clipsRoot
+				});
+				if (result.rowsDeleted || result.clipsDeleted) {
+					Log.info(`[MMM-DoorCam] retention sweep: removed ${result.rowsDeleted} rows, ${result.clipsDeleted} clips`);
+				}
+			} catch (err) {
+				Log.warn(`[MMM-DoorCam] retention sweep failed: ${err && err.message}`);
+			}
+		};
+		// Run once shortly after boot, then every RETENTION_INTERVAL_MS.
+		setTimeout(sweep, 30_000);
+		this.retentionTimer = setInterval(sweep, RETENTION_INTERVAL_MS);
+		if (typeof this.retentionTimer.unref === "function") this.retentionTimer.unref();
 	},
 
 	onCamSocket (camId, ws) {
@@ -115,6 +241,8 @@ module.exports = NodeHelper.create({
 
 		this.sendCommand(cam, { type: "set_state", state: cam.desiredState });
 		this.pushStatus(camId);
+
+		if (this.detector) this.detector.attachCam(cam);
 
 		ws.on("message", (data, isBinary) => {
 			cam.lastSeenAt = Date.now();
@@ -152,6 +280,9 @@ module.exports = NodeHelper.create({
 				cam.lastJpeg = null;
 				Log.info(`[MMM-DoorCam] cam disconnected: ${camId}`);
 				this.pushStatus(camId);
+				if (this.sessionManager) {
+					this.sessionManager.forceEnd(camId, "cam-disconnected").catch(() => { /* logged inside */ });
+				}
 			}
 		};
 		ws.on("close", handleClose);
@@ -224,6 +355,24 @@ module.exports = NodeHelper.create({
 			return;
 		}
 
+		const camEventsMatch = pathname.match(/^\/cam\/([^/]+)\/events$/);
+		if (camEventsMatch && req.method === "GET") {
+			this.handleListEvents(decodeURIComponent(camEventsMatch[1]), parsed.query, res);
+			return;
+		}
+
+		const eventMatch = pathname.match(/^\/events\/(\d+)(?:\/clip(?:\.[a-z0-9]+)?)?$/i);
+		if (eventMatch && req.method === "GET") {
+			const eventId = Number(eventMatch[1]);
+			const wantsClip = pathname.includes("/clip");
+			if (wantsClip) {
+				this.serveClip(eventId, req, res);
+			} else {
+				this.handleGetEvent(eventId, res);
+			}
+			return;
+		}
+
 		const camMatch = pathname.match(/^\/cam\/([^/]+)\/(status|toggle|stream\.mjpg)$/);
 		if (camMatch) {
 			const camId = decodeURIComponent(camMatch[1]);
@@ -276,6 +425,110 @@ module.exports = NodeHelper.create({
 			catch (_) { cb(null); }
 		});
 		req.on("error", () => cb(null));
+	},
+
+	handleListEvents (camId, query, res) {
+		if (!this.store) {
+			res.writeHead(503, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ error: "detection not enabled" }));
+			return;
+		}
+		const sinceMs = query.since !== undefined ? Number(query.since) : undefined;
+		const limit = query.limit !== undefined ? Number(query.limit) : undefined;
+		try {
+			const events = this.store.queryEvents({ camId, sinceMs, limit });
+			res.writeHead(200, { "Content-Type": "application/json" });
+			res.end(JSON.stringify(events));
+		} catch (err) {
+			Log.warn(`[MMM-DoorCam] events query failed: ${err && err.message}`);
+			res.writeHead(500, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ error: "internal error" }));
+		}
+	},
+
+	handleGetEvent (eventId, res) {
+		if (!this.store) {
+			res.writeHead(503, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ error: "detection not enabled" }));
+			return;
+		}
+		const event = this.store.getEvent(eventId);
+		if (!event) {
+			res.writeHead(404, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ error: "not found" }));
+			return;
+		}
+		res.writeHead(200, { "Content-Type": "application/json" });
+		res.end(JSON.stringify(event));
+	},
+
+	serveClip (eventId, req, res) {
+		if (!this.store) {
+			res.writeHead(503, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ error: "detection not enabled" }));
+			return;
+		}
+		const event = this.store.getEvent(eventId);
+		if (!event || !event.clip_path) {
+			res.writeHead(404, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ error: "clip not found" }));
+			return;
+		}
+		const root = expandHome(this.clipsRoot);
+		const abs = path.resolve(root, event.clip_path);
+		// Defense in depth: refuse to serve anything outside clipsRoot.
+		if (!abs.startsWith(path.resolve(root) + path.sep)) {
+			res.writeHead(400, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ error: "invalid path" }));
+			return;
+		}
+
+		let stat;
+		try { stat = fs.statSync(abs); }
+		catch (_) {
+			res.writeHead(404, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ error: "clip file missing" }));
+			return;
+		}
+
+		const contentType = abs.endsWith(".mp4") ? "video/mp4" : "video/x-matroska";
+		const range = req.headers.range;
+		if (range) {
+			const m = /^bytes=(\d*)-(\d*)$/.exec(range);
+			if (!m) {
+				res.writeHead(416, {
+					"Content-Range": `bytes */${stat.size}`,
+					"Content-Type": "application/json"
+				});
+				res.end(JSON.stringify({ error: "invalid range" }));
+				return;
+			}
+			const start = m[1] ? Number(m[1]) : 0;
+			const end = m[2] ? Number(m[2]) : stat.size - 1;
+			if (start >= stat.size || end >= stat.size || start > end) {
+				res.writeHead(416, {
+					"Content-Range": `bytes */${stat.size}`,
+					"Content-Type": "application/json"
+				});
+				res.end(JSON.stringify({ error: "range not satisfiable" }));
+				return;
+			}
+			res.writeHead(206, {
+				"Content-Type": contentType,
+				"Content-Length": end - start + 1,
+				"Content-Range": `bytes ${start}-${end}/${stat.size}`,
+				"Accept-Ranges": "bytes"
+			});
+			fs.createReadStream(abs, { start, end }).pipe(res);
+			return;
+		}
+
+		res.writeHead(200, {
+			"Content-Type": contentType,
+			"Content-Length": stat.size,
+			"Accept-Ranges": "bytes"
+		});
+		fs.createReadStream(abs).pipe(res);
 	},
 
 	serveMjpeg (camId, req, res) {

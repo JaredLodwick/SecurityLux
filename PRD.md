@@ -203,7 +203,6 @@ The module's source of truth lives in this repo at `mm_module/MMM-DoorCam/` and 
     camId: "front",                       // matches the camera's `camera.id`
     hubUrl: "http://meer.local:5000",     // base URL the browser uses for the MJPEG <img>
     hubPort: 5000,                        // port the node_helper hub binds to
-    startEnabled: false,                  // hub will auto-set this camera "on" at start
     hideWhenOff: false,
     showToggleButton: true,
     showStatusBar: true,
@@ -240,9 +239,18 @@ The hub-and-spoke v0.2 design exists explicitly to support these phases without 
 - Retention policy (e.g. 7 days rolling) lives in the recorder, not the hub.
 
 ### Phase 3 — recognition & event log
-- A detector worker consumes frames from the hub (likely via a hub-side internal subscribe API or directly from the in-memory frame buffer) and runs face/person detection.
-- Emits events like `person_detected`, `unknown_face`, `known_face:jared` to an event log (SQLite to start).
+
+#### Phase 3a — person detection + clip recording (in progress, M9a)
+- The hub's `MMM-DoorCam/node_helper.js` runs YOLOv8n-int8 inference on the buffered frames in a `worker_threads` Worker (~2 fps, ~150 ms per inference on Pi 4 8 GB).
+- A per-camera state machine (`session.js`) groups consecutive person detections into "sessions": idle → active on first detection, end on a 1.5 s grace window without a person.
+- Each session writes a row to a local SQLite event log (`~/.mm-doorcam/events.db`) and records a video clip (`~/.mm-doorcam/clips/<cam_id>/<YYYY-MM-DD>/<HH-MM-SS>_person.mkv`) via an `ffmpeg` child process.
+- New hub HTTP endpoints: `GET /cam/<id>/events`, `GET /events/<id>`, `GET /events/<id>/clip.mkv` (with `Range` support).
 - Cameras stay oblivious — all ML stays on the hub.
+
+#### Phase 3b — face recognition (future, M9b)
+- Identify *who* the person is, not just *that* a person is there.
+- Emits richer events like `unknown_face`, `known_face:jared` keyed off enrolled profiles (Phase 4).
+- Door / package / animal classes follow the same hub-side worker pattern.
 
 ### Phase 4 — profiles & clearances
 - Users enroll themselves by adding labeled face samples to the hub.
@@ -388,7 +396,8 @@ None to install separately — `ws` is already in MagicMirror's `node_modules`. 
 | **M6 — Hardening** | done (v0.1) | Logging, repo README, `requirements.txt` pinned. |
 | **M7 — Hub inversion (v0.2)** | done | Mirror Pi runs the hub (`MMM-DoorCam/node_helper.js` on `:5000`). Camera is a thin async WebSocket publisher; no inbound port. Module tracked in this repo at `mm_module/MMM-DoorCam/`. PRD updated. |
 | **M8 — Multi-camera + recording** | next | Stand up a second camera with `cam_id: porch`. Add a hub-side recording worker that taps the buffered frames. |
-| **M9 — Recognition** | future | Hub-side detector worker emits `person_detected` events to a local SQLite log. |
+| **M9a — Person detection + clip recording** | in progress | Hub-side `worker_threads` detector runs YOLOv8n-int8 on buffered frames; per-event clips land in `~/.mm-doorcam/clips/`; events queryable at `GET /cam/<id>/events`. |
+| **M9b — Face recognition** | future | Identity-aware detection: `unknown_face`, `known_face:<id>` events tied to Phase 4 profiles. |
 
 ## 14. Risks & open questions
 
