@@ -54,11 +54,6 @@ module.exports = NodeHelper.create({
 		const camId = cfg.camId;
 		if (!camId) return;
 		this.getCam(camId);
-		if (cfg.startEnabled === false) {
-			this.setDesiredState(camId, "off");
-		} else if (cfg.startEnabled === true) {
-			this.setDesiredState(camId, "on");
-		}
 	},
 
 	getCam (camId) {

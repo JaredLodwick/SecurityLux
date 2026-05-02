@@ -55,7 +55,6 @@ Add an entry to `~/MagicMirror/config/config.js`:
     camId: "front",                       // matches the camera's `camera.id`
     hubUrl: "http://meer.local:5000",     // base URL the browser uses for the MJPEG <img>
     hubPort: 5000,                        // port the node_helper binds to
-    startEnabled: false,                  // hub will auto-set this camera "on" at start
     hideWhenOff: false,
     showToggleButton: true,
     showStatusBar: true,
@@ -65,12 +64,15 @@ Add an entry to `~/MagicMirror/config/config.js`:
 }
 ```
 
+Cameras default to `on` as soon as they connect to the hub. To force one off
+on startup, hit the toggle endpoint from a startup script or click the
+button. There's no `startEnabled` flag.
+
 | Option            | Default                       | Notes |
 |-------------------|-------------------------------|-------|
 | `camId`           | `front`                       | Identifier the camera publishes under. |
 | `hubUrl`          | `http://meer.local:5000`      | Base URL the browser fetches `/stream.mjpg` from. |
 | `hubPort`         | `5000`                        | TCP port the helper binds (HTTP + WS). |
-| `startEnabled`    | `false`                       | If true, hub sets desired state to `on` at startup. |
 | `hideWhenOff`     | `true`                        | Hide the module entirely when the feed is off. |
 | `showToggleButton`| `true`                        | Render the Turn ON / Turn OFF button. |
 | `showStatusBar`   | `true`                        | Render the small fps / resolution / battery line. |
