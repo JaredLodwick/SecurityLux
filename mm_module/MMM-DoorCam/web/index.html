@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>DoorCam · Events</title>
+<title>DoorCam · Hub</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='40' fill='%2300ff88'/></svg>">
 <style>
   :root {
@@ -16,6 +16,7 @@
     --accent: #00ff88;
     --accent-dim: rgba(0, 255, 136, 0.14);
     --error: #c66;
+    --error-dim: rgba(204, 102, 102, 0.16);
   }
 
   * { box-sizing: border-box; }
@@ -47,16 +48,54 @@
     letter-spacing: 0.06em;
     text-transform: uppercase;
   }
-
   header h1 .accent { color: var(--accent); margin: 0 6px; }
 
   .header-meta {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 16px;
     font-size: 0.8rem;
     color: var(--text-muted);
+    flex-wrap: wrap;
   }
+
+  /* iOS-style toggle for detection on/off. */
+  .toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .toggle input { position: absolute; opacity: 0; pointer-events: none; }
+  .toggle .toggle-label { color: var(--text); font-size: 0.85rem; }
+  .toggle-track {
+    position: relative;
+    width: 36px;
+    height: 18px;
+    background: #2a2a2e;
+    border-radius: 9px;
+    transition: background 0.2s;
+    flex-shrink: 0;
+  }
+  .toggle-thumb {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #888;
+    transition: left 0.18s, background 0.18s;
+  }
+  .toggle input:checked ~ .toggle-track { background: var(--accent-dim); }
+  .toggle input:checked ~ .toggle-track .toggle-thumb {
+    left: 20px;
+    background: var(--accent);
+    box-shadow: 0 0 6px rgba(0, 255, 136, 0.5);
+  }
+  .toggle.is-pending .toggle-thumb { opacity: 0.5; }
+  .toggle.is-error ~ .toggle-track { background: var(--error-dim); }
 
   button {
     background: transparent;
@@ -75,28 +114,92 @@
     color: #fff;
   }
   button:active { transform: translateY(1px); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
 
   main {
     max-width: 820px;
     margin: 0 auto;
-    padding: 24px;
+    padding: 20px 24px 40px;
   }
 
-  .empty, .error {
-    text-align: center;
-    padding: 64px 24px;
+  .section-label {
+    font-size: 0.7rem;
     color: var(--text-muted);
-    font-size: 0.95rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin: 16px 0 8px;
   }
-  .error { color: var(--error); }
-  .empty code {
-    background: var(--card);
+  main > .section-label:first-child { margin-top: 0; }
+
+  /* Detection error banner under the header. */
+  .banner {
+    background: var(--error-dim);
+    border: 1px solid rgba(204, 102, 102, 0.4);
+    color: var(--text);
+    padding: 10px 14px;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    margin-bottom: 16px;
+  }
+  .banner .banner-title {
+    color: var(--error);
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+  .banner code {
+    background: rgba(0, 0, 0, 0.4);
     padding: 1px 5px;
     border-radius: 3px;
     color: var(--accent);
-    font-size: 0.9em;
+    font-size: 0.85em;
   }
 
+  /* Cameras section. */
+  .cameras {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 12px;
+    margin-bottom: 8px;
+  }
+  .camera {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .camera-frame {
+    aspect-ratio: 4 / 3;
+    background: #000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+  }
+  .camera-frame img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  .camera-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 12px;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    border-top: 1px solid var(--border);
+  }
+  .camera-bar .camera-name {
+    color: var(--text);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .camera-bar .camera-state-on { color: var(--accent); }
+  .camera-bar .camera-state-off { color: var(--text-muted); }
+
+  /* Events list. */
   .events {
     list-style: none;
     margin: 0;
@@ -139,18 +242,13 @@
     justify-content: center;
     flex-shrink: 0;
     font-size: 0.7rem;
-    transition: background 0.15s, color 0.15s;
   }
   .event[data-expanded="true"] .event-icon {
     background: var(--accent);
     color: #000;
   }
 
-  .event-meta {
-    flex: 1 1 auto;
-    min-width: 0;
-  }
-
+  .event-meta { flex: 1 1 auto; min-width: 0; }
   .event-title {
     font-size: 0.95rem;
     margin-bottom: 2px;
@@ -158,7 +256,6 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-
   .event-sub {
     font-size: 0.78rem;
     color: var(--text-muted);
@@ -172,7 +269,6 @@
     margin-left: 6px;
   }
   .event-sub span:last-child::after { content: ""; }
-
   .event-time {
     font-size: 0.82rem;
     color: var(--text-muted);
@@ -188,7 +284,6 @@
     background: #0a0a0b;
   }
   .event[data-expanded="true"] .event-player { display: block; }
-
   .event-player video {
     width: 100%;
     max-height: 70vh;
@@ -196,7 +291,6 @@
     background: #000;
     display: block;
   }
-
   .event-actions {
     margin-top: 10px;
     display: flex;
@@ -206,18 +300,30 @@
     font-size: 0.8rem;
     color: var(--text-muted);
   }
-  .event-actions a {
-    color: var(--accent);
-    text-decoration: none;
-  }
+  .event-actions a { color: var(--accent); text-decoration: none; }
   .event-actions a:hover { text-decoration: underline; }
-
   .event-no-clip {
     color: var(--text-muted);
     font-size: 0.9rem;
     font-style: italic;
     text-align: center;
     padding: 24px 12px;
+  }
+
+  .empty {
+    text-align: center;
+    padding: 32px 24px;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    border: 1px dashed var(--border);
+    border-radius: 6px;
+  }
+  .empty code {
+    background: var(--card);
+    padding: 1px 5px;
+    border-radius: 3px;
+    color: var(--accent);
+    font-size: 0.9em;
   }
 
   .pulse {
@@ -244,15 +350,24 @@
 <body>
 
 <header>
-  <h1>DoorCam<span class="accent">·</span>Events</h1>
+  <h1>DoorCam<span class="accent">·</span>Hub</h1>
   <div class="header-meta">
+    <label class="toggle" id="detection-toggle-label" title="Toggle person detection">
+      <input type="checkbox" id="detection-toggle">
+      <span class="toggle-track"><span class="toggle-thumb"></span></span>
+      <span class="toggle-label">Detection</span>
+    </label>
     <span id="status"><span class="pulse"></span>loading…</span>
     <button id="refresh" title="Refresh now">Refresh</button>
   </div>
 </header>
 
 <main>
-  <div id="content">
+  <div id="banner"></div>
+  <div class="section-label">Cameras</div>
+  <div id="cameras"></div>
+  <div class="section-label">Events</div>
+  <div id="events">
     <div class="empty">Loading events…</div>
   </div>
 </main>
@@ -264,63 +379,84 @@
     const REFRESH_MS = 15_000;
     const LIMIT = 100;
 
-    const content = document.getElementById("content");
+    const banner = document.getElementById("banner");
+    const camerasEl = document.getElementById("cameras");
+    const eventsEl = document.getElementById("events");
     const status = document.getElementById("status");
     const refreshBtn = document.getElementById("refresh");
-    let refreshTimer = null;
-    let currentEvents = [];
+    const toggleInput = document.getElementById("detection-toggle");
+    const toggleLabel = document.getElementById("detection-toggle-label");
 
-    async function fetchJson(url) {
-        const res = await fetch(url, { cache: "no-store" });
+    let refreshTimer = null;
+    let camerasRendered = false;
+    let detectionPending = false;
+    let lastDetectionState = null;
+
+    async function fetchJson(url, init) {
+        const res = await fetch(url, Object.assign({ cache: "no-store" }, init || {}));
+        const text = await res.text();
+        let body;
+        try { body = text ? JSON.parse(text) : null; } catch (_) { body = null; }
         if (!res.ok) {
-            const err = new Error("HTTP " + res.status);
+            const err = new Error((body && (body.error || body.detail)) || ("HTTP " + res.status));
             err.status = res.status;
+            err.body = body;
             throw err;
         }
-        return res.json();
+        return body;
     }
 
-    async function load() {
+    async function load(initial) {
         try {
-            const cams = await fetchJson("/cams");
-            if (!Array.isArray(cams) || cams.length === 0) {
-                renderEmpty('No cameras registered with the hub yet.');
-                schedule();
-                return;
+            // 1. Detection state — drives the toggle + banner.
+            try {
+                const detection = await fetchJson("/detection");
+                applyDetectionState(detection);
+            } catch (err) {
+                applyDetectionState({ enabled: false, available: false, error: err.message });
             }
 
-            const all = [];
-            let detectionDisabled = false;
+            // 2. Camera list — render thumbnails ONCE so MJPEG streams aren't
+            //    torn down on every auto-refresh.
+            const cams = await fetchJson("/cams");
+            if (!camerasRendered) {
+                renderCameras(cams);
+                camerasRendered = true;
+            } else {
+                updateCameraStates(cams);
+            }
+
+            // 3. Events. Even if detection is currently off, the store may
+            //    still have past rows worth showing.
+            const allEvents = [];
+            let storeUnavailable = false;
             for (const cam of cams) {
                 try {
                     const events = await fetchJson("/cam/" + encodeURIComponent(cam.cam_id) + "/events?limit=" + LIMIT);
-                    for (const e of events) all.push(e);
+                    for (const e of events) allEvents.push(e);
                 } catch (err) {
-                    if (err.status === 503) { detectionDisabled = true; break; }
+                    if (err.status === 503) { storeUnavailable = true; break; }
                     throw err;
                 }
             }
-
-            if (detectionDisabled) {
-                renderEmpty('Detection is not enabled. Set <code>detection.enabled: true</code> in your MagicMirror config to start capturing events.');
-                schedule();
-                return;
+            if (storeUnavailable) {
+                renderEventsEmpty('Event store unavailable. Enable detection above to start capturing events.');
+            } else {
+                allEvents.sort((a, b) => b.started_at_ms - a.started_at_ms);
+                renderEvents(allEvents);
             }
-
-            all.sort((a, b) => b.started_at_ms - a.started_at_ms);
-            const expandedId = currentlyExpandedId();
-            currentEvents = all;
-            render(all, expandedId);
             setStatus("updated " + new Date().toLocaleTimeString());
         } catch (err) {
-            renderError(err.message || String(err));
+            setStatus("error");
+            renderEventsEmpty('<span style="color:var(--error)">Error loading events: ' + escapeHtml(err.message) + '</span>');
         }
         schedule();
     }
 
     function schedule() {
         if (refreshTimer) clearTimeout(refreshTimer);
-        // Don't refresh under a playing video — it would tear down the player.
+        // Don't refresh while a video is playing; the events list re-render
+        // would tear the player down.
         const playing = document.querySelector(".event[data-expanded='true'] video");
         const isPlaying = playing && !playing.paused && !playing.ended;
         refreshTimer = setTimeout(isPlaying ? schedule : load, REFRESH_MS);
@@ -331,32 +467,176 @@
         status.textContent = text;
     }
 
-    function renderEmpty(html) {
-        content.innerHTML = '<div class="empty">' + html + '</div>';
-        setStatus("");
+    /* ---- Detection toggle ---- */
+
+    function applyDetectionState(state) {
+        lastDetectionState = state;
+        toggleInput.checked = !!state.enabled;
+        toggleLabel.classList.toggle("is-error", !!state.error);
+        toggleLabel.classList.toggle("is-pending", detectionPending);
+
+        banner.innerHTML = "";
+        if (state.error) {
+            const div = document.createElement("div");
+            div.className = "banner";
+            div.innerHTML =
+                '<div class="banner-title">Detection couldn\'t start</div>' +
+                '<div>' + escapeHtml(state.error) + '</div>' +
+                '<div style="margin-top:6px;color:var(--text-muted);font-size:0.85em;">' +
+                'Most common cause: <code>better-sqlite3</code> wasn\'t built against the Node version MagicMirror runs under. ' +
+                'Re-run <code>./mm_module/install.sh</code> on the hub Pi using the same Node that starts MagicMirror, then restart MagicMirror.' +
+                '</div>';
+            banner.appendChild(div);
+        }
     }
 
-    function renderError(msg) {
-        content.innerHTML = '<div class="error">Error loading events: ' + escapeHtml(msg) + '</div>';
-        setStatus("error");
-    }
+    toggleInput.addEventListener("change", async (ev) => {
+        if (detectionPending) return;
+        const wantEnabled = ev.target.checked;
+        detectionPending = true;
+        toggleLabel.classList.add("is-pending");
+        toggleInput.disabled = true;
+        try {
+            const newState = await fetchJson("/detection", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ enabled: wantEnabled })
+            });
+            applyDetectionState(newState);
+        } catch (err) {
+            // Server returned non-2xx; the body still contains the new state.
+            applyDetectionState(err.body || { enabled: false, error: err.message });
+        } finally {
+            detectionPending = false;
+            toggleInput.disabled = false;
+            toggleLabel.classList.remove("is-pending");
+            // Detection toggling can change which events the store has;
+            // refresh now to show that.
+            if (refreshTimer) clearTimeout(refreshTimer);
+            load();
+        }
+    });
 
-    function render(events, keepExpandedId) {
-        if (events.length === 0) {
-            renderEmpty('No events captured yet. Walk past the camera to trigger one.');
+    /* ---- Cameras ---- */
+
+    function renderCameras(cams) {
+        camerasEl.replaceChildren();
+        if (!cams || cams.length === 0) {
+            const empty = document.createElement("div");
+            empty.className = "empty";
+            empty.textContent = "No cameras have ever connected to the hub.";
+            camerasEl.appendChild(empty);
             return;
         }
+        const grid = document.createElement("div");
+        grid.className = "cameras";
+        for (const cam of cams) grid.appendChild(renderCamera(cam));
+        camerasEl.appendChild(grid);
+    }
+
+    function renderCamera(cam) {
+        const card = document.createElement("div");
+        card.className = "camera";
+        card.dataset.camId = cam.cam_id;
+
+        const frame = document.createElement("div");
+        frame.className = "camera-frame";
+        renderCameraFrame(frame, cam);
+        card.appendChild(frame);
+
+        const bar = document.createElement("div");
+        bar.className = "camera-bar";
+        const name = document.createElement("span");
+        name.className = "camera-name";
+        name.textContent = cam.cam_id;
+        bar.appendChild(name);
+        const state = document.createElement("span");
+        state.className = "camera-state " + (cam.state === "on" ? "camera-state-on" : "camera-state-off");
+        state.textContent = describeCamState(cam);
+        bar.appendChild(state);
+        card.appendChild(bar);
+
+        return card;
+    }
+
+    function renderCameraFrame(frame, cam) {
+        frame.replaceChildren();
+        if (cam.connected && cam.state === "on") {
+            const img = document.createElement("img");
+            img.alt = cam.cam_id + " live feed";
+            // Cache-bust on initial load only — afterwards the MJPEG stream
+            // keeps the connection alive on its own.
+            img.src = "/cam/" + encodeURIComponent(cam.cam_id) + "/stream.mjpg?t=" + Date.now();
+            frame.appendChild(img);
+        } else {
+            const placeholder = document.createElement("div");
+            if (!cam.connected) {
+                placeholder.textContent = "camera offline";
+            } else {
+                placeholder.textContent = "camera off";
+            }
+            frame.appendChild(placeholder);
+        }
+    }
+
+    function updateCameraStates(cams) {
+        for (const cam of cams) {
+            const card = camerasEl.querySelector('.camera[data-cam-id="' + cssEscape(cam.cam_id) + '"]');
+            if (!card) continue;
+            const bar = card.querySelector(".camera-bar .camera-state");
+            if (bar) {
+                bar.className = "camera-state " + (cam.state === "on" ? "camera-state-on" : "camera-state-off");
+                bar.textContent = describeCamState(cam);
+            }
+            // If the cam transitioned off → on (or offline → connected), we
+            // need a fresh <img> to reopen the MJPEG. Detect by checking
+            // whether the frame currently has an <img>.
+            const frame = card.querySelector(".camera-frame");
+            const hasImg = frame && frame.querySelector("img");
+            const wantImg = cam.connected && cam.state === "on";
+            if (frame && (!hasImg && wantImg || hasImg && !wantImg)) {
+                renderCameraFrame(frame, cam);
+            }
+        }
+    }
+
+    function describeCamState(cam) {
+        if (!cam.connected) return "offline";
+        if (cam.state === "on") return "live";
+        return "off";
+    }
+
+    function cssEscape(s) {
+        // Minimal escape for use inside a [data-cam-id="..."] selector.
+        return String(s).replace(/(["\\])/g, "\\$1");
+    }
+
+    /* ---- Events ---- */
+
+    function renderEvents(events) {
+        if (events.length === 0) {
+            renderEventsEmpty('No events captured yet. Walk past the camera to trigger one.');
+            return;
+        }
+        const expandedId = currentlyExpandedId();
         const ul = document.createElement("ul");
         ul.className = "events";
         for (const e of events) {
             const li = renderEvent(e);
-            if (e.id === keepExpandedId) {
+            if (e.id === expandedId) {
                 li.dataset.expanded = "true";
                 renderPlayer(li.querySelector(".event-player"), e);
             }
             ul.appendChild(li);
         }
-        content.replaceChildren(ul);
+        eventsEl.replaceChildren(ul);
+    }
+
+    function renderEventsEmpty(html) {
+        const div = document.createElement("div");
+        div.className = "empty";
+        div.innerHTML = html;
+        eventsEl.replaceChildren(div);
     }
 
     function renderEvent(e) {
@@ -410,7 +690,6 @@
 
     function toggle(li, e) {
         const wasOpen = li.dataset.expanded === "true";
-        // Collapse any other open event so only one player renders at a time.
         document.querySelectorAll('.event[data-expanded="true"]').forEach((other) => {
             if (other === li) return;
             other.dataset.expanded = "false";
@@ -463,16 +742,15 @@
         actions.appendChild(pathSpan);
 
         container.appendChild(actions);
-
-        // Best-effort autoplay; browsers usually block until user gesture, which
-        // the click on the row IS, so this often succeeds.
-        video.play().catch(() => { /* user can hit play */ });
+        video.play().catch(() => { /* autoplay may be blocked; controls still work */ });
     }
 
     function currentlyExpandedId() {
         const el = document.querySelector('.event[data-expanded="true"]');
         return el ? Number(el.dataset.eventId) : null;
     }
+
+    /* ---- helpers ---- */
 
     function makeSpan(text) {
         const s = document.createElement("span");
@@ -516,7 +794,7 @@
         load();
     });
 
-    load();
+    load(true);
 })();
 </script>
 </body>

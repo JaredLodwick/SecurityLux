@@ -60,24 +60,23 @@ class Detector {
 
     /**
      * Bring the detector up: ensure model present, spawn worker. Idempotent.
-     * Returns false if anything blocking goes wrong (caller continues without
-     * detection — the rest of the hub keeps running).
+     * Returns `{ ok: true }` on success, `{ ok: false, error: string }` on
+     * failure. Caller decides whether to surface the error or just log.
      */
     async start() {
-        if (this.worker) return true;
-        if (!this.cfg.enabled) {
-            this.log.info("[MMM-DoorCam] detection disabled by config");
-            return false;
-        }
+        if (this.worker) return { ok: true };
 
         try {
             this.modelPath = await this._ensureModel();
         } catch (err) {
-            this.log.error(`[MMM-DoorCam] detection unavailable: ${err.message}`);
-            return false;
+            this.log.error(`[MMM-DoorCam] detector model unavailable: ${err.message}`);
+            return { ok: false, error: `model: ${err.message}` };
         }
 
-        return this._spawnWorker();
+        if (!this._spawnWorker()) {
+            return { ok: false, error: "failed to spawn detector worker (see logs)" };
+        }
+        return { ok: true };
     }
 
     /**

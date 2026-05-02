@@ -35,6 +35,8 @@ module.exports = NodeHelper.create({
 		this.sessionManager = null;
 		this.retentionTimer = null;
 		this.detectionBootPromise = null;
+		this.detectionEnabled = false;     // runtime state (POST /detection)
+		this.detectionError = null;        // last boot failure, surfaced via API
 	},
 
 	stop () {
@@ -157,53 +159,100 @@ module.exports = NodeHelper.create({
 
 		// Detection runs alongside the HTTP/WS server. We boot it lazily and
 		// asynchronously so a bad model URL or missing dep can't block the
-		// camera pipeline.
+		// camera pipeline. Runtime state can be flipped via POST /detection
+		// regardless of what the config initially asked for.
 		if (this.detectionCfg && this.detectionCfg.enabled) {
-			this.detectionBootPromise = this._bootDetection().catch((err) => {
-				Log.error(`[MMM-DoorCam] detection boot failed: ${err && err.message}`);
+			this.detectionBootPromise = this._bootDetection().then((r) => {
+				if (!r.ok) Log.warn(`[MMM-DoorCam] initial detection boot failed: ${r.error}`);
+			}).catch((err) => {
+				Log.error(`[MMM-DoorCam] detection boot exception: ${err && err.message}`);
 			});
 		} else {
-			Log.info("[MMM-DoorCam] detection disabled (set detection.enabled: true to opt in)");
+			Log.info("[MMM-DoorCam] detection disabled at startup (POST /detection { enabled: true } to start)");
 		}
 	},
 
+	/**
+	 * Idempotent: brings the detection subsystem up (store + detector +
+	 * session manager). Returns { ok, error } so callers — config-driven
+	 * boot OR runtime POST /detection — can surface failures to the user.
+	 * The store stays open across stop/start so historical events remain
+	 * queryable when detection is paused.
+	 */
 	async _bootDetection () {
-		try {
-			this.store = new Store({ dbPath: this.dbPath, logger: Log }).open();
-		} catch (err) {
-			Log.error(`[MMM-DoorCam] failed to open event store: ${err && err.message}`);
-			this.store = null;
-			return;
+		if (this.detector && this.sessionManager && this.store) {
+			this.detectionEnabled = true;
+			this.detectionError = null;
+			return { ok: true };
 		}
 
-		this.sessionManager = new SessionManager({
-			store: this.store,
-			recordingCfg: this.recordingCfg || {},
-			clipsRoot: this.clipsRoot,
-			recorderFactory: (cam, opts) => new Recorder({ cam, ...opts }),
-			getCam: (camId) => this.getCam(camId),
-			logger: Log
-		});
-
-		this.detector = new Detector({
-			detectionCfg: this.detectionCfg,
-			onObservation: (obs) => this._onDetection(obs),
-			logger: Log
-		});
-
-		const ok = await this.detector.start();
-		if (!ok) {
-			Log.warn("[MMM-DoorCam] detector did not start; sessions will not be recorded");
-			this.detector = null;
-			return;
+		if (!this.store) {
+			try {
+				this.store = new Store({ dbPath: this.dbPath, logger: Log }).open();
+			} catch (err) {
+				const msg = `event store unavailable: ${err && err.message}`;
+				Log.error(`[MMM-DoorCam] ${msg}`);
+				this.detectionError = msg;
+				this.store = null;
+				return { ok: false, error: msg };
+			}
 		}
 
-		// Attach any cams already known so they get tick loops immediately.
-		for (const cam of this.cams.values()) {
-			this.detector.attachCam(cam);
+		if (!this.sessionManager) {
+			this.sessionManager = new SessionManager({
+				store: this.store,
+				recordingCfg: this.recordingCfg || {},
+				clipsRoot: this.clipsRoot,
+				recorderFactory: (cam, opts) => new Recorder({ cam, ...opts }),
+				getCam: (camId) => this.getCam(camId),
+				logger: Log
+			});
+		}
+
+		if (!this.detector) {
+			this.detector = new Detector({
+				detectionCfg: this.detectionCfg || {},
+				onObservation: (obs) => this._onDetection(obs),
+				logger: Log
+			});
+			const result = await this.detector.start();
+			if (!result.ok) {
+				this.detectionError = result.error;
+				this.detector = null;
+				return { ok: false, error: result.error };
+			}
+			for (const cam of this.cams.values()) {
+				this.detector.attachCam(cam);
+			}
 		}
 
 		this._scheduleRetentionSweep();
+		this.detectionEnabled = true;
+		this.detectionError = null;
+		return { ok: true };
+	},
+
+	async _stopDetection (reason) {
+		if (this.sessionManager) {
+			try { await this.sessionManager.forceEndAll(reason || "runtime-disable"); }
+			catch (_) { /* logged inside */ }
+		}
+		if (this.detector) {
+			try { await this.detector.stop(); } catch (_) { /* ignore */ }
+			this.detector = null;
+		}
+		this.detectionEnabled = false;
+		// Note: store and sessionManager kept around — store stays queryable
+		// for historical events; sessionManager will get a fresh detector if
+		// detection is re-enabled.
+	},
+
+	_detectionStatus () {
+		return {
+			enabled: !!(this.detector && this.sessionManager && this.store),
+			available: !!this.store,             // deps loaded, store is openable
+			error: this.detectionError || null
+		};
 	},
 
 	_onDetection (obs) {
@@ -374,6 +423,15 @@ module.exports = NodeHelper.create({
 			this.serveWebPage(res);
 			return;
 		}
+		if (pathname === "/detection" && req.method === "GET") {
+			res.writeHead(200, { "Content-Type": "application/json" });
+			res.end(JSON.stringify(this._detectionStatus()));
+			return;
+		}
+		if (pathname === "/detection" && req.method === "POST") {
+			this.handleDetectionToggle(req, res);
+			return;
+		}
 		if (pathname === "/cams" && req.method === "GET") {
 			const list = [];
 			for (const id of this.cams.keys()) list.push(this.statusFor(id));
@@ -454,6 +512,25 @@ module.exports = NodeHelper.create({
 		req.on("error", () => cb(null));
 	},
 
+	handleDetectionToggle (req, res) {
+		this.readJsonBody(req, async (body) => {
+			if (!body || typeof body.enabled !== "boolean") {
+				res.writeHead(400, { "Content-Type": "application/json" });
+				res.end(JSON.stringify({ error: "body must be { enabled: boolean }" }));
+				return;
+			}
+			let bootResult = { ok: true };
+			if (body.enabled) {
+				bootResult = await this._bootDetection();
+			} else {
+				await this._stopDetection("api-disable");
+			}
+			const status = this._detectionStatus();
+			res.writeHead(bootResult.ok ? 200 : 500, { "Content-Type": "application/json" });
+			res.end(JSON.stringify(status));
+		});
+	},
+
 	serveWebPage (res) {
 		const filePath = path.join(__dirname, "web", "index.html");
 		fs.readFile(filePath, (err, data) => {
@@ -474,7 +551,10 @@ module.exports = NodeHelper.create({
 	handleListEvents (camId, query, res) {
 		if (!this.store) {
 			res.writeHead(503, { "Content-Type": "application/json" });
-			res.end(JSON.stringify({ error: "detection not enabled" }));
+			res.end(JSON.stringify({
+				error: "events store unavailable",
+				detail: this.detectionError || "detection has never been enabled on this hub"
+			}));
 			return;
 		}
 		const sinceMs = query.since !== undefined ? Number(query.since) : undefined;
