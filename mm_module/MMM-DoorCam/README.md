@@ -199,7 +199,22 @@ dbPath: "~/.mm-doorcam/events.db"
   (up to `maxClipSeconds`), not 15. Single-frame false positives are filtered
   by the `minClipSeconds` floor.
 
-### Querying events
+### Browsing events
+
+The hub serves a tiny dashboard at the root URL — open it from any device
+on your LAN:
+
+```
+http://meer.local:5000/
+```
+
+It lists the most recent events newest-first; clicking a row expands an
+inline `<video>` player and a download link for that clip. Auto-refreshes
+every 15 s (paused while a clip is playing). No build step, no JS deps —
+the page is a single self-contained HTML file at
+`mm_module/MMM-DoorCam/web/index.html`.
+
+### Querying events from the CLI
 
 ```bash
 # Recent events for the front camera

@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DoorCam · Events</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='40' fill='%2300ff88'/></svg>">
+<style>
+  :root {
+    --bg: #0d0d0e;
+    --card: #18181b;
+    --card-hover: #1f1f23;
+    --border: #2a2a2e;
+    --text: #e5e5e5;
+    --text-muted: #888;
+    --accent: #00ff88;
+    --accent-dim: rgba(0, 255, 136, 0.14);
+    --error: #c66;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    line-height: 1.4;
+    min-height: 100vh;
+  }
+
+  header {
+    border-bottom: 1px solid var(--border);
+    padding: 14px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+
+  header h1 {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 500;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  header h1 .accent { color: var(--accent); margin: 0 6px; }
+
+  .header-meta {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+  }
+
+  button {
+    background: transparent;
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px 12px;
+    font-size: 0.8rem;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+  }
+  button:hover {
+    border-color: var(--text-muted);
+    background: var(--card-hover);
+    color: #fff;
+  }
+  button:active { transform: translateY(1px); }
+
+  main {
+    max-width: 820px;
+    margin: 0 auto;
+    padding: 24px;
+  }
+
+  .empty, .error {
+    text-align: center;
+    padding: 64px 24px;
+    color: var(--text-muted);
+    font-size: 0.95rem;
+  }
+  .error { color: var(--error); }
+  .empty code {
+    background: var(--card);
+    padding: 1px 5px;
+    border-radius: 3px;
+    color: var(--accent);
+    font-size: 0.9em;
+  }
+
+  .events {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .event {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .event:hover { background: var(--card-hover); }
+  .event[data-expanded="true"] {
+    background: var(--card-hover);
+    border-color: var(--accent-dim);
+  }
+
+  .event-summary {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 14px;
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .event-icon {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    background: var(--accent-dim);
+    color: var(--accent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    font-size: 0.7rem;
+    transition: background 0.15s, color 0.15s;
+  }
+  .event[data-expanded="true"] .event-icon {
+    background: var(--accent);
+    color: #000;
+  }
+
+  .event-meta {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .event-title {
+    font-size: 0.95rem;
+    margin-bottom: 2px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .event-sub {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 10px;
+  }
+  .event-sub span::after {
+    content: " ·";
+    color: var(--border);
+    margin-left: 6px;
+  }
+  .event-sub span:last-child::after { content: ""; }
+
+  .event-time {
+    font-size: 0.82rem;
+    color: var(--text-muted);
+    flex-shrink: 0;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .event-player {
+    border-top: 1px solid var(--border);
+    padding: 14px;
+    display: none;
+    background: #0a0a0b;
+  }
+  .event[data-expanded="true"] .event-player { display: block; }
+
+  .event-player video {
+    width: 100%;
+    max-height: 70vh;
+    border-radius: 4px;
+    background: #000;
+    display: block;
+  }
+
+  .event-actions {
+    margin-top: 10px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+  }
+  .event-actions a {
+    color: var(--accent);
+    text-decoration: none;
+  }
+  .event-actions a:hover { text-decoration: underline; }
+
+  .event-no-clip {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    font-style: italic;
+    text-align: center;
+    padding: 24px 12px;
+  }
+
+  .pulse {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+    margin-right: 6px;
+    vertical-align: middle;
+    animation: pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+  @media (max-width: 600px) {
+    header { padding: 10px 14px; }
+    main { padding: 14px; }
+    .event-summary { padding: 10px 12px; gap: 10px; }
+    .event-time { font-size: 0.75rem; }
+    .event-title { font-size: 0.9rem; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>DoorCam<span class="accent">·</span>Events</h1>
+  <div class="header-meta">
+    <span id="status"><span class="pulse"></span>loading…</span>
+    <button id="refresh" title="Refresh now">Refresh</button>
+  </div>
+</header>
+
+<main>
+  <div id="content">
+    <div class="empty">Loading events…</div>
+  </div>
+</main>
+
+<script>
+(function () {
+    "use strict";
+
+    const REFRESH_MS = 15_000;
+    const LIMIT = 100;
+
+    const content = document.getElementById("content");
+    const status = document.getElementById("status");
+    const refreshBtn = document.getElementById("refresh");
+    let refreshTimer = null;
+    let currentEvents = [];
+
+    async function fetchJson(url) {
+        const res = await fetch(url, { cache: "no-store" });
+        if (!res.ok) {
+            const err = new Error("HTTP " + res.status);
+            err.status = res.status;
+            throw err;
+        }
+        return res.json();
+    }
+
+    async function load() {
+        try {
+            const cams = await fetchJson("/cams");
+            if (!Array.isArray(cams) || cams.length === 0) {
+                renderEmpty('No cameras registered with the hub yet.');
+                schedule();
+                return;
+            }
+
+            const all = [];
+            let detectionDisabled = false;
+            for (const cam of cams) {
+                try {
+                    const events = await fetchJson("/cam/" + encodeURIComponent(cam.cam_id) + "/events?limit=" + LIMIT);
+                    for (const e of events) all.push(e);
+                } catch (err) {
+                    if (err.status === 503) { detectionDisabled = true; break; }
+                    throw err;
+                }
+            }
+
+            if (detectionDisabled) {
+                renderEmpty('Detection is not enabled. Set <code>detection.enabled: true</code> in your MagicMirror config to start capturing events.');
+                schedule();
+                return;
+            }
+
+            all.sort((a, b) => b.started_at_ms - a.started_at_ms);
+            const expandedId = currentlyExpandedId();
+            currentEvents = all;
+            render(all, expandedId);
+            setStatus("updated " + new Date().toLocaleTimeString());
+        } catch (err) {
+            renderError(err.message || String(err));
+        }
+        schedule();
+    }
+
+    function schedule() {
+        if (refreshTimer) clearTimeout(refreshTimer);
+        // Don't refresh under a playing video — it would tear down the player.
+        const playing = document.querySelector(".event[data-expanded='true'] video");
+        const isPlaying = playing && !playing.paused && !playing.ended;
+        refreshTimer = setTimeout(isPlaying ? schedule : load, REFRESH_MS);
+    }
+
+    function setStatus(text) {
+        status.innerHTML = "";
+        status.textContent = text;
+    }
+
+    function renderEmpty(html) {
+        content.innerHTML = '<div class="empty">' + html + '</div>';
+        setStatus("");
+    }
+
+    function renderError(msg) {
+        content.innerHTML = '<div class="error">Error loading events: ' + escapeHtml(msg) + '</div>';
+        setStatus("error");
+    }
+
+    function render(events, keepExpandedId) {
+        if (events.length === 0) {
+            renderEmpty('No events captured yet. Walk past the camera to trigger one.');
+            return;
+        }
+        const ul = document.createElement("ul");
+        ul.className = "events";
+        for (const e of events) {
+            const li = renderEvent(e);
+            if (e.id === keepExpandedId) {
+                li.dataset.expanded = "true";
+                renderPlayer(li.querySelector(".event-player"), e);
+            }
+            ul.appendChild(li);
+        }
+        content.replaceChildren(ul);
+    }
+
+    function renderEvent(e) {
+        const li = document.createElement("li");
+        li.className = "event";
+        li.dataset.expanded = "false";
+        li.dataset.eventId = String(e.id);
+
+        const summary = document.createElement("div");
+        summary.className = "event-summary";
+
+        const icon = document.createElement("div");
+        icon.className = "event-icon";
+        icon.textContent = "▶";
+        summary.appendChild(icon);
+
+        const meta = document.createElement("div");
+        meta.className = "event-meta";
+
+        const title = document.createElement("div");
+        title.className = "event-title";
+        title.textContent = capitalize(e.type || "event") + " detected";
+        meta.appendChild(title);
+
+        const sub = document.createElement("div");
+        sub.className = "event-sub";
+        sub.appendChild(makeSpan(e.cam_id));
+        if (e.duration_ms) sub.appendChild(makeSpan(formatDuration(e.duration_ms)));
+        if (e.detection_count) sub.appendChild(makeSpan(e.detection_count + " detections"));
+        if (typeof e.max_confidence === "number") {
+            sub.appendChild(makeSpan(Math.round(e.max_confidence * 100) + "% confidence"));
+        }
+        if (!e.clip_path) sub.appendChild(makeSpan("no clip"));
+        meta.appendChild(sub);
+        summary.appendChild(meta);
+
+        const time = document.createElement("div");
+        time.className = "event-time";
+        time.textContent = formatTime(e.started_at_ms);
+        summary.appendChild(time);
+
+        const player = document.createElement("div");
+        player.className = "event-player";
+
+        li.appendChild(summary);
+        li.appendChild(player);
+
+        summary.addEventListener("click", () => toggle(li, e));
+        return li;
+    }
+
+    function toggle(li, e) {
+        const wasOpen = li.dataset.expanded === "true";
+        // Collapse any other open event so only one player renders at a time.
+        document.querySelectorAll('.event[data-expanded="true"]').forEach((other) => {
+            if (other === li) return;
+            other.dataset.expanded = "false";
+            other.querySelector(".event-player").replaceChildren();
+        });
+        if (wasOpen) {
+            li.dataset.expanded = "false";
+            li.querySelector(".event-player").replaceChildren();
+        } else {
+            li.dataset.expanded = "true";
+            renderPlayer(li.querySelector(".event-player"), e);
+            li.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        }
+    }
+
+    function renderPlayer(container, e) {
+        container.replaceChildren();
+        if (!e.clip_path) {
+            container.appendChild(textDiv("event-no-clip",
+                "No clip recorded for this event (was ffmpeg available when it was captured?)."));
+            return;
+        }
+        const ext = (e.clip_path.match(/\.(mkv|mp4)$/i) || [".mkv"])[0];
+        const url = "/events/" + e.id + "/clip" + ext;
+
+        const video = document.createElement("video");
+        video.controls = true;
+        video.preload = "metadata";
+        video.playsInline = true;
+        video.src = url;
+        video.addEventListener("error", () => {
+            const note = textDiv("event-no-clip",
+                "Your browser couldn't decode this clip (MKV/MJPEG isn't universal). " +
+                "Use the download link below, or switch the hub's recording.codec to \"h264\" for broader compatibility.");
+            container.appendChild(note);
+        });
+        container.appendChild(video);
+
+        const actions = document.createElement("div");
+        actions.className = "event-actions";
+
+        const dl = document.createElement("a");
+        dl.href = url;
+        dl.download = e.clip_path.split("/").pop();
+        dl.textContent = "Download";
+        actions.appendChild(dl);
+
+        const pathSpan = document.createElement("span");
+        pathSpan.textContent = e.clip_path;
+        actions.appendChild(pathSpan);
+
+        container.appendChild(actions);
+
+        // Best-effort autoplay; browsers usually block until user gesture, which
+        // the click on the row IS, so this often succeeds.
+        video.play().catch(() => { /* user can hit play */ });
+    }
+
+    function currentlyExpandedId() {
+        const el = document.querySelector('.event[data-expanded="true"]');
+        return el ? Number(el.dataset.eventId) : null;
+    }
+
+    function makeSpan(text) {
+        const s = document.createElement("span");
+        s.textContent = text;
+        return s;
+    }
+    function textDiv(cls, text) {
+        const d = document.createElement("div");
+        d.className = cls;
+        d.textContent = text;
+        return d;
+    }
+    function formatTime(ms) {
+        const d = new Date(ms);
+        const today = new Date();
+        const sameDay = d.toDateString() === today.toDateString();
+        const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+        if (sameDay) return time;
+        const date = d.toLocaleDateString([], { month: "short", day: "numeric" });
+        return date + " " + time;
+    }
+    function formatDuration(ms) {
+        if (ms < 1000) return ms + " ms";
+        const s = ms / 1000;
+        if (s < 60) return s.toFixed(1) + "s";
+        const m = Math.floor(s / 60);
+        return m + "m " + Math.round(s - m * 60) + "s";
+    }
+    function capitalize(s) {
+        if (!s) return "";
+        return s.charAt(0).toUpperCase() + s.slice(1);
+    }
+    function escapeHtml(s) {
+        return String(s).replace(/[&<>"']/g, (c) =>
+            ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    }
+
+    refreshBtn.addEventListener("click", () => {
+        if (refreshTimer) clearTimeout(refreshTimer);
+        setStatus("refreshing…");
+        load();
+    });
+
+    load();
+})();
+</script>
+</body>
+</html>

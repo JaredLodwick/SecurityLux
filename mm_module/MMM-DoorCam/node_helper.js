@@ -370,6 +370,10 @@ module.exports = NodeHelper.create({
 			res.end("ok");
 			return;
 		}
+		if ((pathname === "/" || pathname === "/index.html") && req.method === "GET") {
+			this.serveWebPage(res);
+			return;
+		}
 		if (pathname === "/cams" && req.method === "GET") {
 			const list = [];
 			for (const id of this.cams.keys()) list.push(this.statusFor(id));
@@ -448,6 +452,23 @@ module.exports = NodeHelper.create({
 			catch (_) { cb(null); }
 		});
 		req.on("error", () => cb(null));
+	},
+
+	serveWebPage (res) {
+		const filePath = path.join(__dirname, "web", "index.html");
+		fs.readFile(filePath, (err, data) => {
+			if (err) {
+				Log.warn(`[MMM-DoorCam] failed to read web/index.html: ${err.message}`);
+				res.writeHead(500, { "Content-Type": "text/plain" });
+				res.end("internal error");
+				return;
+			}
+			res.writeHead(200, {
+				"Content-Type": "text/html; charset=utf-8",
+				"Cache-Control": "no-cache"
+			});
+			res.end(data);
+		});
 	},
 
 	handleListEvents (camId, query, res) {
