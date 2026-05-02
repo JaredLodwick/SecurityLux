@@ -33,7 +33,9 @@ class Detector {
     /**
      * @param {object} opts
      * @param {object} opts.detectionCfg   Module's `detection` config block.
-     * @param {Function} opts.onObservation `(camId, hasPerson, confidence) => void`
+     * @param {Function} opts.onObservation `(observation) => void` where
+     *   `observation = { camId, hasPerson, confidence, cls, bbox, frameSeq, ts }`
+     *   and `bbox` is normalized 0-1 cx/cy/w/h (or null when no person).
      * @param {object} [opts.logger]
      * @param {string} [opts.modelDir]     Override for tests.
      */
@@ -223,10 +225,16 @@ class Detector {
         try {
             const result = await this._postInfer(cam.id, cam.frameSeq, cam.lastJpeg);
             const det = result.detections.find((d) => d.cls === "person");
-            const hasPerson = !!det;
-            const confidence = det ? det.confidence : 0;
             try {
-                this.onObservation(camId, hasPerson, confidence);
+                this.onObservation({
+                    camId,
+                    hasPerson: !!det,
+                    confidence: det ? det.confidence : 0,
+                    cls: det ? det.cls : null,
+                    bbox: det ? det.bbox : null,    // normalized 0-1 cx/cy/w/h
+                    frameSeq: result.frameSeq,
+                    ts: Date.now()
+                });
             } catch (err) {
                 this.log.warn(`[MMM-DoorCam] onObservation handler threw: ${err && err.message}`);
             }

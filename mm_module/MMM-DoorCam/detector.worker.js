@@ -146,15 +146,18 @@ function decodeYolo(buf, confidenceThreshold) {
 
     if (bestIdx < 0 || bestScore < confidenceThreshold) return [];
 
-    const cx = buf[0 * stride + bestIdx];
-    const cy = buf[1 * stride + bestIdx];
-    const w  = buf[2 * stride + bestIdx];
-    const h  = buf[3 * stride + bestIdx];
+    // YOLO outputs cx/cy/w/h in the input image space (320×320). The pre-
+    // process resizes with `fit: "fill"`, so dividing by INPUT_W/H gives
+    // normalized 0-1 coords that map directly to whatever size the browser
+    // ends up rendering at.
+    const cx = buf[0 * stride + bestIdx] / INPUT_W;
+    const cy = buf[1 * stride + bestIdx] / INPUT_H;
+    const w  = buf[2 * stride + bestIdx] / INPUT_W;
+    const h  = buf[3 * stride + bestIdx] / INPUT_H;
 
     return [{
         cls: "person",
         confidence: bestScore,
-        // Coords are in the input image space (320×320). Caller can scale.
         bbox: { cx, cy, w, h }
     }];
 }

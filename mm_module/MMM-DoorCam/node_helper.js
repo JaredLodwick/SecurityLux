@@ -14,6 +14,7 @@ const { SessionManager } = require("./session");
 const MJPEG_BOUNDARY = "frame";
 const STATUS_STALE_MS = 30_000;
 const RETENTION_INTERVAL_MS = 6 * 60 * 60 * 1000;   // 6h
+const DETECTION_FRESH_MS = 1500;                    // overlay disappears after this
 
 module.exports = NodeHelper.create({
 	start () {
@@ -118,7 +119,9 @@ module.exports = NodeHelper.create({
 				connected: false,
 				ws: null,
 				lastSeenAt: 0,
-				frameSeq: 0
+				frameSeq: 0,
+				lastDetection: null,
+				lastDetectionAt: 0
 			};
 			this.cams.set(camId, cam);
 		}
@@ -184,11 +187,7 @@ module.exports = NodeHelper.create({
 
 		this.detector = new Detector({
 			detectionCfg: this.detectionCfg,
-			onObservation: (camId, hasPerson, confidence) => {
-				if (this.sessionManager) {
-					this.sessionManager.observe(camId, hasPerson, confidence);
-				}
-			},
+			onObservation: (obs) => this._onDetection(obs),
 			logger: Log
 		});
 
@@ -205,6 +204,27 @@ module.exports = NodeHelper.create({
 		}
 
 		this._scheduleRetentionSweep();
+	},
+
+	_onDetection (obs) {
+		if (!obs || !obs.camId) return;
+		const cam = this.getCam(obs.camId);
+		if (obs.hasPerson) {
+			cam.lastDetection = {
+				class: obs.cls || "person",
+				confidence: obs.confidence,
+				bbox: obs.bbox || null
+			};
+			cam.lastDetectionAt = obs.ts || Date.now();
+		}
+		// hasPerson === false: leave lastDetection in place. statusFor's
+		// staleness check (DETECTION_FRESH_MS) will fade it out smoothly so
+		// a single missed inference doesn't flicker the overlay.
+
+		if (this.sessionManager) {
+			this.sessionManager.observe(obs.camId, obs.hasPerson, obs.confidence);
+		}
+		this.pushStatus(obs.camId);
 	},
 
 	_scheduleRetentionSweep () {
@@ -312,8 +332,10 @@ module.exports = NodeHelper.create({
 
 	statusFor (camId) {
 		const cam = this.getCam(camId);
-		const fresh = cam.connected && (Date.now() - cam.lastSeenAt) < STATUS_STALE_MS;
+		const now = Date.now();
+		const fresh = cam.connected && (now - cam.lastSeenAt) < STATUS_STALE_MS;
 		const reported = cam.status || {};
+		const detectionFresh = cam.lastDetectionAt && (now - cam.lastDetectionAt) < DETECTION_FRESH_MS;
 		return {
 			cam_id: camId,
 			state: cam.desiredState,
@@ -324,7 +346,8 @@ module.exports = NodeHelper.create({
 			battery_pct: reported.battery_pct ?? null,
 			on_battery: reported.on_battery ?? null,
 			camera_available: reported.camera_available ?? null,
-			last_frame_age_ms: cam.lastJpegAt ? Date.now() - cam.lastJpegAt : null
+			last_frame_age_ms: cam.lastJpegAt ? now - cam.lastJpegAt : null,
+			current_detection: detectionFresh ? cam.lastDetection : null
 		};
 	},
 

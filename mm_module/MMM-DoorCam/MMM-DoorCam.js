@@ -4,7 +4,7 @@ Module.register("MMM-DoorCam", {
 		hubUrl: "http://meer.local:5000",
 		hubPort: 5000,
 		hideWhenOff: true,
-		showToggleButton: true,
+		showToggleButton: false,
 		showStatusBar: true,
 		width: "320px",
 		title: "Door Cam",
@@ -30,7 +30,7 @@ Module.register("MMM-DoorCam", {
 			graceMs: 1500,
 			retentionDays: 14
 		},
-		clipsRoot: "~/.mm-doorcam/clips",
+		clipsRoot: "~/Videos/SecurityCamera",
 		dbPath: "~/.mm-doorcam/events.db"
 	},
 
@@ -150,6 +150,8 @@ Module.register("MMM-DoorCam", {
 		const frame = document.createElement("div");
 		frame.className = "doorcam-frame";
 		frame.appendChild(this.renderVideoChild());
+		const overlay = this.renderBboxOverlay();
+		if (overlay) frame.appendChild(overlay);
 		wrap.appendChild(frame);
 
 		if (this.config.showStatusBar) wrap.appendChild(this.renderStatusBar());
@@ -184,20 +186,85 @@ Module.register("MMM-DoorCam", {
 		return placeholder;
 	},
 
+	/**
+	 * Translucent bbox overlay drawn on top of the live MJPEG <img>.
+	 * `current_detection.bbox` is normalized 0-1 cx/cy/w/h from the hub —
+	 * we convert to CSS percentages and let the overlay scale naturally
+	 * with whatever size the module ends up rendering at.
+	 */
+	renderBboxOverlay () {
+		if (this.cameraState !== "on") return null;
+		const s = this.status;
+		if (!s || !s.connected || !s.current_detection || !s.current_detection.bbox) return null;
+		const { cx, cy, w, h } = s.current_detection.bbox;
+		if (![cx, cy, w, h].every((n) => typeof n === "number" && isFinite(n))) return null;
+
+		const layer = document.createElement("div");
+		layer.className = "doorcam-bbox-layer";
+
+		const box = document.createElement("div");
+		box.className = "doorcam-bbox";
+		const left = Math.max(0, (cx - w / 2)) * 100;
+		const top = Math.max(0, (cy - h / 2)) * 100;
+		const widthPct = Math.min(100 - left, w * 100);
+		const heightPct = Math.min(100 - top, h * 100);
+		box.style.left = `${left}%`;
+		box.style.top = `${top}%`;
+		box.style.width = `${widthPct}%`;
+		box.style.height = `${heightPct}%`;
+
+		const label = document.createElement("span");
+		label.className = "doorcam-bbox-label";
+		const conf = Math.round((s.current_detection.confidence || 0) * 100);
+		const cls = s.current_detection.class || "object";
+		label.textContent = conf > 0 ? `${cls} ${conf}%` : cls;
+		box.appendChild(label);
+
+		layer.appendChild(box);
+		return layer;
+	},
+
 	renderStatusBar () {
 		const bar = document.createElement("div");
 		bar.className = "doorcam-status";
 		const s = this.status || {};
-		const parts = [];
-		if (s.state) parts.push(s.state.toUpperCase());
-		if (typeof s.fps === "number") parts.push(`${s.fps} fps`);
-		if (s.resolution) parts.push(String(s.resolution).replace("x", "×"));
-		if (typeof s.battery_pct === "number" && isFinite(s.battery_pct)) {
-			const pct = Math.round(s.battery_pct);
-			parts.push(s.on_battery === false ? `${pct}% ⚡` : `${pct}%`);
+
+		// Left column: detection chip — only when something is currently
+		// detected. Right column: state + battery, always present.
+		const left = document.createElement("div");
+		left.className = "doorcam-status-left";
+		if (s.current_detection) {
+			const chip = document.createElement("span");
+			chip.className = "doorcam-event-chip";
+			const cls = s.current_detection.class || "object";
+			chip.textContent = `${cls.charAt(0).toUpperCase() + cls.slice(1)} detected`;
+			left.appendChild(chip);
 		}
-		if (s.connected === false) parts.push("offline");
-		bar.textContent = parts.length ? parts.join("  •  ") : "—";
+
+		const right = document.createElement("div");
+		right.className = "doorcam-status-right";
+		if (s.state) {
+			const state = document.createElement("span");
+			state.className = "doorcam-state";
+			state.textContent = s.state.toUpperCase();
+			right.appendChild(state);
+		}
+		if (typeof s.battery_pct === "number" && isFinite(s.battery_pct)) {
+			const battery = document.createElement("span");
+			battery.className = "doorcam-battery";
+			const pct = Math.round(s.battery_pct);
+			battery.textContent = s.on_battery === false ? `${pct}% ⚡` : `${pct}%`;
+			right.appendChild(battery);
+		}
+		if (s.connected === false) {
+			const off = document.createElement("span");
+			off.className = "doorcam-state doorcam-state-offline";
+			off.textContent = "OFFLINE";
+			right.appendChild(off);
+		}
+
+		bar.appendChild(left);
+		bar.appendChild(right);
 		return bar;
 	},
 

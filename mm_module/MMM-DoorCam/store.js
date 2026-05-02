@@ -243,23 +243,19 @@ function rowToEvent(row) {
 }
 
 function pruneEmptyClipDirs(root, log) {
-    // Two levels deep: <root>/<cam_id>/<YYYY-MM-DD>/. Only remove if empty.
-    let camDirs;
-    try { camDirs = fs.readdirSync(root); }
+    // Layout: <root>/<YYYY-MM-DD>/<file>. Walk one level deep and remove any
+    // date directory that has no clips left after the row delete.
+    let entries;
+    try { entries = fs.readdirSync(root, { withFileTypes: true }); }
     catch (_) { return; }
-    for (const camId of camDirs) {
-        const camDir = path.join(root, camId);
-        let dateDirs;
-        try { dateDirs = fs.readdirSync(camDir); }
-        catch (_) { continue; }
-        for (const dateDir of dateDirs) {
-            const abs = path.join(camDir, dateDir);
-            try {
-                if (fs.readdirSync(abs).length === 0) fs.rmdirSync(abs);
-            } catch (err) {
-                if (err.code !== "ENOENT" && err.code !== "ENOTEMPTY") {
-                    log.warn(`[MMM-DoorCam] retention: failed to rmdir ${abs}: ${err.message}`);
-                }
+    for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const abs = path.join(root, entry.name);
+        try {
+            if (fs.readdirSync(abs).length === 0) fs.rmdirSync(abs);
+        } catch (err) {
+            if (err.code !== "ENOENT" && err.code !== "ENOTEMPTY") {
+                log.warn(`[MMM-DoorCam] retention: failed to rmdir ${abs}: ${err.message}`);
             }
         }
     }

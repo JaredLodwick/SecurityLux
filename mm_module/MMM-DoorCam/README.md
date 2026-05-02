@@ -128,7 +128,11 @@ Each "person session" (a person enters frame → stays → leaves) becomes:
 
 1. A row in a SQLite event log (`~/.mm-doorcam/events.db`).
 2. A video clip on disk at
-   `~/.mm-doorcam/clips/<cam_id>/<YYYY-MM-DD>/<HH-MM-SS>_person.mkv`.
+   `~/Videos/SecurityCamera/<YYYY-MM-DD>/<HH-MM-SS>_<cam_id>_person.mkv`.
+
+While a person is in frame, the on-mirror module shows a green
+bounding-box overlay around the detection and a "Person detected" chip
+in the bottom-left status row.
 
 ### Enable it
 
@@ -178,7 +182,7 @@ recording: {
   graceMs: 1500,              // grace window after the last person frame before ending
   retentionDays: 14           // daily sweep deletes events + clips older than this
 },
-clipsRoot: "~/.mm-doorcam/clips",
+clipsRoot: "~/Videos/SecurityCamera",
 dbPath: "~/.mm-doorcam/events.db"
 ```
 

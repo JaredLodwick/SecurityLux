@@ -122,8 +122,8 @@ test("Store: retentionSweep removes old rows + clip files", () => {
     try {
         const store = new Store({ dbPath, logger: silentLog }).open();
         const now = Date.now();
-        const oldRel = "front/2020-01-01/01-00-00_person.mkv";
-        const newRel = "front/" + new Date().toISOString().slice(0, 10) + "/01-00-00_person.mkv";
+        const oldRel = "2020-01-01/01-00-00_front_person.mkv";
+        const newRel = new Date().toISOString().slice(0, 10) + "/01-00-00_front_person.mkv";
         fs.mkdirSync(path.join(clipsRoot, path.dirname(oldRel)), { recursive: true });
         fs.mkdirSync(path.join(clipsRoot, path.dirname(newRel)), { recursive: true });
         fs.writeFileSync(path.join(clipsRoot, oldRel), "old");

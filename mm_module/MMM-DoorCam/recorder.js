@@ -218,9 +218,12 @@ class Recorder {
         const ss = String(date.getSeconds()).padStart(2, "0");
         const ext = this.cfg.codec === "h264" ? "mp4" : "mkv";
 
+        // Layout: <clipsRoot>/<YYYY-MM-DD>/<HH-MM-SS>_<camId>_<event>.<ext>
+        // The cam id moves into the filename so a single date folder holds
+        // every camera's clips for that day, easy to scan in a file manager.
         const dateDir = `${yyyy}-${mm}-${dd}`;
-        const fileName = `${hh}-${mi}-${ss}_${this.eventType}.${ext}`;
-        const relPath = path.join(this.cam.id, dateDir, fileName);
+        const fileName = `${hh}-${mi}-${ss}_${this.cam.id}_${this.eventType}.${ext}`;
+        const relPath = path.join(dateDir, fileName);
         const absPath = path.join(this.clipsRoot, relPath);
         return { absPath, relPath };
     }
