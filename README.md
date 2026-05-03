@@ -27,20 +27,36 @@ DoorCamera/
 
 ## Quick start
 
-1. **Camera Pi** — see [`pi_client/README.md`](pi_client/README.md) for OS
-   flash, deps, config, and the systemd unit. Default config points at
-   `ws://meer.local:5000` and registers as `cam_id: front`.
-2. **MagicMirror Pi** — clone this repo somewhere (e.g. `~/DoorCamera`),
-   then run:
+Two Pis, one installer each.
+
+1. **Camera Pi** (the door, e.g. `doorcam.local`):
    ```bash
+   git clone https://github.com/JaredLodwick/DoorCamera.git ~/DoorCamera
+   cd ~/DoorCamera
+   ./pi_client/install.sh
+   ```
+   Installs apt + pip deps, registers a systemd unit (`doorcam.service`)
+   that starts on boot and auto-restarts on crash, bootstraps
+   `/etc/doorcam/config.yml`. Default config points at `ws://meer.local:5000`
+   and registers as `cam_id: front`.
+
+2. **MagicMirror Pi** (the hub, e.g. `meer.local`):
+   ```bash
+   git clone https://github.com/JaredLodwick/DoorCamera.git ~/DoorCamera
+   cd ~/DoorCamera
    ./mm_module/install.sh
    ```
-   That symlinks `~/MagicMirror/modules/MMM-DoorCam` into this repo and
-   wires up the helper's `node_modules`. Add an `MMM-DoorCam` entry to
-   `~/MagicMirror/config/config.js` (see `mm_module/MMM-DoorCam/README.md`)
+   Symlinks the module into MagicMirror, installs hub-side npm deps
+   (`onnxruntime-node`, `sharp`, `better-sqlite3`), warns if `ffmpeg` is
+   missing. Add an `MMM-DoorCam` entry to `~/MagicMirror/config/config.js`
+   (see [`mm_module/MMM-DoorCam/README.md`](mm_module/MMM-DoorCam/README.md))
    and restart MagicMirror.
-3. **Verify** from the Mirror Pi:
+
+3. **Verify** from any LAN device:
    ```bash
-   curl http://localhost:5000/healthz
-   curl http://localhost:5000/cams
+   curl http://meer.local:5000/healthz
+   curl http://meer.local:5000/cams
    ```
+   Then open `http://meer.local:5000/` for the events dashboard.
+
+Both installers are idempotent — re-run them after a `git pull` to upgrade.

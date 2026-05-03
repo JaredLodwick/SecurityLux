@@ -90,29 +90,45 @@ Config is read from, in order: `$DOORCAM_CONFIG` → `/etc/doorcam/config.yml`
 
 ## Deploying to the Pi
 
-1. Copy the project to the Pi, e.g. `/opt/doorcam/`.
-2. Create the virtualenv and install deps:
-   ```bash
-   cd /opt/doorcam/pi_client
-   python3 -m venv .venv
-   .venv/bin/pip install --upgrade pip
-   .venv/bin/pip install -r requirements.txt
-   ```
-3. Install the systemd unit:
-   ```bash
-   sudo cp deploy/doorcam.service /etc/systemd/system/doorcam.service
-   sudo systemctl daemon-reload
-   sudo systemctl enable --now doorcam
-   sudo systemctl status doorcam
-   ```
-4. Verify from the mirror Pi:
-   ```bash
-   curl http://localhost:5000/cams
-   # should list {"cam_id":"front","connected":true,...}
-   ```
+The fast path: clone the repo on the camera Pi and run the installer.
 
-The unit runs as `User=pi` and expects the project at
-`/opt/doorcam/pi_client`. Use `systemctl edit doorcam` to override either.
+```bash
+git clone https://github.com/JaredLodwick/DoorCamera.git ~/DoorCamera
+cd ~/DoorCamera
+./pi_client/install.sh
+```
+
+The script auto-detects the user and install path, installs apt + pip deps,
+adds the user to the `video` group, bootstraps `/etc/doorcam/config.yml`
+from the example, and registers a systemd unit (`doorcam.service`) that
+starts on boot and auto-restarts on crash. It is idempotent — re-run it
+after a `git pull` to pick up changes.
+
+Verify from the hub Pi:
+
+```bash
+curl http://meer.local:5000/cams
+# should list {"cam_id":"front","connected":true,...}
+```
+
+### Doing it manually instead
+
+If the installer doesn't fit (different init system, custom layout, etc.),
+do it by hand:
+
+```bash
+cd ~/DoorCamera/pi_client
+python3 -m venv .venv
+.venv/bin/pip install --upgrade pip
+.venv/bin/pip install -r requirements.txt
+sudo usermod -aG video "$USER"
+sudo cp config.example.yml /etc/doorcam/config.yml   # then edit
+.venv/bin/python -m doorcam      # foreground test run
+```
+
+For an auto-restart service, write your own systemd unit modelled on what
+`install.sh` generates — `User=`, `WorkingDirectory=`, `ExecStart=` are the
+only paths you need to template.
 
 ## Running the tests
 

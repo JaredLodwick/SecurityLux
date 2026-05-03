@@ -114,143 +114,76 @@ DoorCamera/
 
 ## 6. Install the Pi client
 
-The Pi client is a Python application. It lives inside its own virtual environment so it doesn't clash with system Python packages.
+One command does everything — pip deps, `video` group membership, the systemd unit that runs on boot and auto-restarts on crash, and a default `/etc/doorcam/config.yml` if one isn't there yet.
 
 ```bash
-cd ~/DoorCamera/pi_client
-
-# Create an isolated Python environment in .venv
-python3 -m venv .venv
-
-# Activate it — your shell prompt should now show (.venv)
-source .venv/bin/activate
-
-# Upgrade pip inside the venv
-pip install --upgrade pip
-
-# Install all dependencies listed in requirements.txt
-pip install -r requirements.txt
+cd ~/DoorCamera
+./pi_client/install.sh
 ```
 
-This will take a few minutes on a Pi Zero 2 W — OpenCV's wheel is large. Be patient.
+You'll be prompted for your sudo password once (the script self-elevates). It is **idempotent** — re-run it after a `git pull` to pick up upstream changes without resetting your config.
+
+The installer auto-detects your username and the install path, so it works whether the repo is cloned in your home dir or under `/opt/`. When it finishes you should see:
+
+```
+[OK] doorcam.service is running.
+```
 
 ### Configure
 
-Copy the example config and review the defaults:
+The installer drops a default config at `/etc/doorcam/config.yml` only if one doesn't already exist. The defaults — `640×480 @ 15 fps` on `/dev/video0`, hub at `ws://meer.local:5000`, cam id `front` — work out of the box if your MagicMirror Pi answers to `meer.local`. To change anything:
 
 ```bash
-cp config.example.yml config.yml
-nano config.yml          # or use vim / your editor of choice
+sudoedit /etc/doorcam/config.yml
+sudo systemctl restart doorcam
 ```
 
-The defaults (640×480 @ 15 fps on `/dev/video0`, hub at `ws://meer.local:5000`) are intentionally conservative for the Pi Zero 2 W's 512 MB of RAM. You can bump resolution or fps later once you confirm things work; I'd advise starting with the defaults.
+### Verify the feed
 
-If your MagicMirror Pi has a different hostname, change `hub.url` to point at it.
-
-## 7. Test run (foreground)
-
-With the venv still active:
+Tail the publisher's logs as it connects:
 
 ```bash
-python -m doorcam
+journalctl -fu doorcam
 ```
 
-You should see log output similar to:
+You should see:
 
 ```
-INFO doorcam.config: Loading config from ./config.yml
 INFO doorcam.publisher: Connecting to hub at ws://meer.local:5000/cam/front
 INFO doorcam.publisher: Hub requested state=on
 ```
 
-If you instead see `Hub requested state=off`, the hub thinks the camera should be off — check that the MagicMirror Pi is up to date with this repo and that MagicMirror has been restarted. The hub defaults new cameras to `on` as soon as they connect.
+`Hub requested state=off` instead means the hub thinks the camera should be off — check that the MagicMirror Pi is up to date with this repo and has been restarted. The hub defaults new cameras to `on` as soon as they connect.
 
-If the webcam isn't plugged in or fails to open, you'll see a warning about a mock camera. The publisher still runs; it just sends placeholder frames. Good for sanity-checking the wire side without hardware.
+If the webcam isn't plugged in, you'll see a warning about a mock camera. The publisher still runs; it just sends placeholder frames so you can sanity-check the wire side without hardware.
 
-### View the feed
-
-The feed renders in the `MMM-DoorCam` module on the MagicMirror itself. From any other device on your LAN you can also fetch the buffered MJPEG stream directly from the hub:
+From any LAN device, the buffered MJPEG stream is at:
 
 ```
 http://meer.local:5000/cam/front/stream.mjpg
 ```
 
-Open that URL in a browser and you should see the live frames the camera Pi is publishing.
+The events dashboard is at:
 
-### Stop the test run
+```
+http://meer.local:5000/
+```
 
-Press `Ctrl+C` in the SSH terminal to stop.
+### Doing it manually instead
 
-## 8. Install as a system service (auto-start on boot)
-
-You don't want to SSH in and launch the process every reboot. `systemd` handles this.
-
-The shipped service file expects the code at `/opt/doorcam`. Two common paths:
-
-### Option A — install to `/opt/doorcam` (matches the shipped service file)
+If `install.sh` doesn't fit (different init system, custom layout, no sudo, etc.), the underlying steps are:
 
 ```bash
-# Create the destination and copy the code
-sudo mkdir -p /opt/doorcam
-sudo cp -r ~/DoorCamera/pi_client /opt/doorcam/
-
-# Let the 'pi' user own it so the service can write logs etc.
-sudo chown -R pi:pi /opt/doorcam
-
-# Create a fresh venv in the new location
-cd /opt/doorcam/pi_client
+cd ~/DoorCamera/pi_client
 python3 -m venv .venv
-source .venv/bin/activate
-pip install --upgrade pip
-pip install -r requirements.txt
-cp config.example.yml config.yml
-deactivate
-
-# Install the systemd unit
-sudo cp /opt/doorcam/pi_client/deploy/doorcam.service /etc/systemd/system/
-
-# Enable and start
-sudo systemctl daemon-reload
-sudo systemctl enable doorcam
-sudo systemctl start doorcam
-
-# Confirm it's running
-sudo systemctl status doorcam
+.venv/bin/pip install --upgrade pip
+.venv/bin/pip install -r requirements.txt
+sudo usermod -aG video "$USER"          # for /dev/video0 access
+sudo cp config.example.yml /etc/doorcam/config.yml
+.venv/bin/python -m doorcam              # foreground test run; Ctrl+C to stop
 ```
 
-### Option B — keep the repo in your home dir and edit the service file
-
-```bash
-sudo cp ~/DoorCamera/pi_client/deploy/doorcam.service /etc/systemd/system/
-sudo nano /etc/systemd/system/doorcam.service
-```
-
-Change these two lines so they point at your repo clone:
-
-```ini
-WorkingDirectory=/home/pi/DoorCamera/pi_client
-ExecStart=/home/pi/DoorCamera/pi_client/.venv/bin/python -m doorcam
-```
-
-Then:
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable doorcam
-sudo systemctl start doorcam
-sudo systemctl status doorcam
-```
-
-Both paths produce the same result. Option A is the "official" one — consider it the production install — and Option B is convenient during active development when you want `git pull` to update the running code.
-
-### Camera device permissions
-
-The service runs as user `pi`. For the service to read from `/dev/video0`, `pi` must be in the `video` group. Most Raspberry Pi OS installs have this by default, but if the service logs permission errors opening the camera:
-
-```bash
-sudo usermod -aG video pi
-sudo systemctl restart doorcam
-```
+To run it as a service without `install.sh`, write your own systemd unit modelled on what `install.sh` generates — only `User=`, `WorkingDirectory=`, and `ExecStart=` need templating.
 
 ---
 
@@ -340,16 +273,12 @@ journalctl -u doorcam -p err -b
 ## Updating the code
 
 ```bash
-# If you installed via Option A (/opt/doorcam)
-cd /opt/doorcam/pi_client
-sudo git -C /opt/doorcam pull     # only if /opt/doorcam is a git clone; otherwise re-copy from ~/DoorCamera
-sudo systemctl restart doorcam
-
-# If you installed via Option B (home dir)
 cd ~/DoorCamera
 git pull
-sudo systemctl restart doorcam
+./pi_client/install.sh    # idempotent — re-installs deps and refreshes the service
 ```
+
+`install.sh` rewrites `/etc/systemd/system/doorcam.service` and restarts the service for you. It leaves `/etc/doorcam/config.yml` alone, so your custom settings survive.
 
 ---
 
@@ -459,7 +388,7 @@ This MVP is designed for a **trusted home LAN** only. Things to be aware of befo
 | Camera live logs | `journalctl -u doorcam -f` |
 | Restart camera service | `sudo systemctl restart doorcam` |
 | Pull latest code (camera) | `cd ~/DoorCamera && git pull && sudo systemctl restart doorcam` |
-| Edit config | `sudo nano /opt/doorcam/pi_client/config.yml` (or wherever you installed) |
+| Edit config | `sudoedit /etc/doorcam/config.yml` (then `sudo systemctl restart doorcam`) |
 | Test camera detected | `v4l2-ctl --list-devices` |
 | Test PiSugar socket | `echo "get battery" \| nc -q 0 127.0.0.1 8423` |
 

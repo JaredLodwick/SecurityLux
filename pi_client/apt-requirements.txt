@@ -1,0 +1,32 @@
+# Debian/APT system packages the Pi client depends on at runtime.
+# These are NOT installed by pip — they are C shared libraries owned by the OS.
+#
+# Install on the Pi with:
+#   sudo apt install -y $(grep -v '^#' apt-requirements.txt | tr '\n' ' ')
+#
+# Or manually, one line at a time:
+#   sudo apt install -y git python3-venv python3-pip v4l-utils avahi-daemon libopenblas0 libatlas3-base libgl1
+
+# Version control (to clone the repo)
+git
+
+# Python tooling
+python3-venv
+python3-pip
+
+# Camera diagnostics — lets you inspect /dev/video* from the shell
+v4l-utils
+
+# mDNS so the Pi is reachable at doorcam.local
+avahi-daemon
+
+# Numerical library numpy links against at runtime. Without this you get:
+#   ImportError: libopenblas.so.0: cannot open shared object file
+libopenblas0
+
+# Fallback BLAS some wheels prefer over OpenBLAS
+libatlas3-base
+
+# OpenGL runtime. opencv-python-headless shouldn't need this, but some
+# of its image codecs still pull it in on ARM — cheap insurance.
+libgl1
