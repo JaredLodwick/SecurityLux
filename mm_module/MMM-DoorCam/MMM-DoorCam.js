@@ -1,3 +1,16 @@
+function detectionEqual (a, b) {
+	if (a === b) return true;
+	if (!a || !b) return false;
+	if (a.class !== b.class) return false;
+	if (Math.abs((a.confidence || 0) - (b.confidence || 0)) > 0.01) return false;
+	const ab = a.bbox || {}; const bb = b.bbox || {};
+	const eps = 0.005; // 0.5% of frame; below that is invisible at 320px width
+	return Math.abs((ab.cx || 0) - (bb.cx || 0)) < eps
+		&& Math.abs((ab.cy || 0) - (bb.cy || 0)) < eps
+		&& Math.abs((ab.w  || 0) - (bb.w  || 0)) < eps
+		&& Math.abs((ab.h  || 0) - (bb.h  || 0)) < eps;
+}
+
 Module.register("MMM-DoorCam", {
 	defaults: {
 		camId: "front",
@@ -8,7 +21,7 @@ Module.register("MMM-DoorCam", {
 		showStatusBar: true,
 		width: "320px",
 		title: "Door Cam",
-		streamRefreshSeconds: 30,
+		streamRefreshSeconds: 300,    // belt-and-suspenders against silent drops
 		staleFrameMs: 10000,
 		errorRetryMs: 1500,
 		// --- Hub-side person detection + per-event recording. ---
@@ -66,27 +79,50 @@ Module.register("MMM-DoorCam", {
 	socketNotificationReceived (notification, payload) {
 		if (notification !== "DOORCAM_STATUS") return;
 		if (!payload || payload.cam_id !== this.config.camId) return;
+
+		const prev = this.status;
 		const prevState = this.cameraState;
 		this.status = payload;
 		this.cameraState = payload.state || null;
-		let refreshed = false;
+
+		let nonceChanged = false;
 		if (prevState !== this.cameraState && this.cameraState === "on") {
-			this.streamNonce = Date.now();
-			refreshed = true;
+			this._refreshStreamSrc();
+			nonceChanged = true;
 		}
-		if (!refreshed && this.cameraState === "on" && payload.connected) {
+		if (!nonceChanged && this.cameraState === "on" && payload.connected) {
 			const ageMs = payload.last_frame_age_ms;
 			if (typeof ageMs === "number" && isFinite(ageMs) && ageMs > this.config.staleFrameMs) {
-				this.streamNonce = Date.now();
+				this._refreshStreamSrc();
+				nonceChanged = true;
 			}
 		}
+
 		if (this.cameraState === "on") {
 			this._scheduleRefreshTimer();
 		} else {
 			this._stopRefreshTimer();
 		}
 		this.inFlightToggle = false;
-		this.updateDom();
+
+		// updateDom() through morphdom isn't free — even when nothing visible
+		// changed it walks the subtree. With the detector pushing status at
+		// ~2 Hz this used to thrash on every tick. Skip the update unless
+		// something the user can actually see has changed.
+		if (nonceChanged || this._statusChangedVisibly(prev, payload, prevState)) {
+			this.updateDom();
+		}
+	},
+
+	_statusChangedVisibly (prev, next, prevState) {
+		if (!prev) return true;
+		if (prevState !== this.cameraState) return true;
+		if (prev.connected !== next.connected) return true;
+		if (prev.battery_pct !== next.battery_pct) return true;
+		if (prev.on_battery !== next.on_battery) return true;
+		// Detection presence + bbox drives the chip and overlay.
+		if (!detectionEqual(prev.current_detection, next.current_detection)) return true;
+		return false;
 	},
 
 	_scheduleRefreshTimer () {
@@ -107,8 +143,27 @@ Module.register("MMM-DoorCam", {
 	_refreshStreamIfOn () {
 		if (this.cameraState !== "on") return;
 		if (!this.status || !this.status.connected) return;
-		this.streamNonce = Date.now();
+		this._refreshStreamSrc();
 		this.updateDom();
+	},
+
+	/**
+	 * Bump the stream nonce AND explicitly null out the live <img> src first.
+	 *
+	 * Browsers don't reliably abort the underlying TCP for a multipart MJPEG
+	 * response when src changes via morphdom — the connection sticks around
+	 * "loading forever" and counts against the per-origin connection cap (~6).
+	 * After enough refreshes the cap is exhausted and new MJPEG fetches stall,
+	 * which presents as the feed silently disappearing. Setting src="" first
+	 * forces the browser to abort the previous fetch synchronously.
+	 */
+	_refreshStreamSrc () {
+		const wrapper = document.getElementById(this.identifier);
+		const oldImg = wrapper && wrapper.querySelector(".doorcam-stream");
+		if (oldImg && oldImg.src) {
+			try { oldImg.src = ""; } catch (_) { /* ignore */ }
+		}
+		this.streamNonce = Date.now();
 	},
 
 	notificationReceived (notification) {
