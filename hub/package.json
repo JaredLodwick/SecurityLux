@@ -1,0 +1,22 @@
+{
+  "name": "lux-security-hub",
+  "version": "0.1.0",
+  "private": true,
+  "description": "LuxSecurityHub — standalone HTTP+WebSocket hub for camera_node publishers, with on-host person detection and per-event clip recording.",
+  "license": "MIT",
+  "main": "src/hub.js",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "start": "node src/hub.js",
+    "test": "node --test tests/*.test.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.3.0",
+    "js-yaml": "^4.1.0",
+    "onnxruntime-node": "^1.20.0",
+    "sharp": "^0.33.5",
+    "ws": "^8.18.0"
+  }
+}

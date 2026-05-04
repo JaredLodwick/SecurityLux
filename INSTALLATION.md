@@ -1,19 +1,27 @@
-# Door Cam — Installation & Operation Manual
+# LuxSecurityCamera — Installation & Operation Manual
 
-A step-by-step guide to get the Door Cam software running and streaming to your MagicMirror.
+A step-by-step guide to set up the full system from scratch.
 
-The system has two pieces:
+The system has three independent components:
 
-- **Camera Pi** (`doorcam.local`, a Raspberry Pi Zero 2 W) — captures frames from a USB webcam and **publishes** them outbound to the hub. Runs no inbound listener. This manual focuses here.
-- **MagicMirror Pi** (`meer.local`) — runs MagicMirror² with the `MMM-DoorCam` module, which doubles as the camera **hub**: a single HTTP+WebSocket server on port 5000 that cameras connect into and that the on-mirror UI (and other LAN consumers) read from.
+- **Hub** (any Linux host with Node 18+, `meer.local` in the examples). The
+  standalone server camera nodes connect to. Runs detection, recording,
+  the dashboard. Lives in `hub/`.
+- **Camera node** (`doorcam.local`, a Raspberry Pi Zero 2 W). Captures
+  frames from a USB webcam and **publishes** them outbound to the hub.
+  Runs no inbound listener. Lives in `camera_node/`. One per camera.
+- **MagicMirror display** (*optional*, `meer.local`). A pure browser-side
+  module that displays one camera's live feed on your MagicMirror. Lives
+  in `mm_module/MMM-LuxSecurityDisplay/`.
 
-This manual assumes the camera Pi is already:
+The walkthrough below installs all three. If you don't have a MagicMirror,
+skip Section 11. If your hub is the same physical box as your MagicMirror,
+the hub install just adds a second systemd unit alongside MM.
+
+This manual assumes both Pis are already:
 - Flashed with Raspberry Pi OS Lite 64-bit (Bookworm or later)
-- On your WiFi network
-- Reachable over SSH at `pi@doorcam.local`
-- Has the repo cloned from GitHub (see Section 2 if not)
-
-It also assumes the MagicMirror Pi is already up and running MagicMirror². See `mm_module/MMM-DoorCam/README.md` for the hub-side install (a one-line `./mm_module/install.sh` symlink + a `config.js` entry).
+- On your network and reachable over SSH (`pi@doorcam.local`, `pi@meer.local`)
+- Have the repo cloned from GitHub (see Section 2 if not)
 
 ---
 
@@ -58,7 +66,7 @@ What each of these does:
 - `libopenblas0`, `libatlas3-base` — numerical libraries numpy's compiled extensions link against at runtime. Without `libopenblas0` you get `ImportError: libopenblas.so.0: cannot open shared object file` at startup.
 - `libgl1` — OpenGL runtime that some ARM builds of OpenCV still pull in even on the headless wheel.
 
-The same list is tracked in `pi_client/apt-requirements.txt` for future reference.
+The same list is tracked in `camera_node/apt-requirements.txt` for future reference.
 
 ## 3. Verify the camera is detected
 
@@ -93,32 +101,33 @@ echo "get battery" | nc -q 0 127.0.0.1 8423
 # Expect something like: battery: 87.5
 ```
 
-## 5. Clone the Door Cam repo (skip if already done)
+## 5. Clone the repo (skip if already done)
 
 ```bash
 cd ~
-git clone git@github.com:JaredLodwick/DoorCamera.git
-cd DoorCamera
+git clone git@github.com:JaredLodwick/DoorCamera.git LuxSecurityCamera
+cd LuxSecurityCamera
 ```
 
 Repo layout you'll see:
 
 ```
-DoorCamera/
-  PRD.md                   # product requirements
-  INSTALLATION.md          # this file
+LuxSecurityCamera/
+  PRD.md                                # product requirements
+  INSTALLATION.md                       # this file
   README.md
-  pi_client/               # Python WS publisher (this Pi)
-  mm_module/MMM-DoorCam/   # MagicMirror module + hub server (the other Pi)
+  hub/                                  # standalone Node hub (HTTP+WS server, detection, dashboard)
+  camera_node/                          # Python WebSocket publisher (this Pi)
+  mm_module/MMM-LuxSecurityDisplay/     # optional MagicMirror display
 ```
 
-## 6. Install the Pi client
+## 6. Install the camera node
 
-One command does everything — pip deps, `video` group membership, the systemd unit that runs on boot and auto-restarts on crash, and a default `/etc/doorcam/config.yml` if one isn't there yet.
+One command does everything — pip deps, `video` group membership, the systemd unit that runs on boot and auto-restarts on crash, and a default `/etc/camera-node/config.yml` if one isn't there yet.
 
 ```bash
-cd ~/DoorCamera
-./pi_client/install.sh
+cd ~/LuxSecurityCamera
+./camera_node/install.sh
 ```
 
 You'll be prompted for your sudo password once (the script self-elevates). It is **idempotent** — re-run it after a `git pull` to pick up upstream changes without resetting your config.
@@ -126,16 +135,16 @@ You'll be prompted for your sudo password once (the script self-elevates). It is
 The installer auto-detects your username and the install path, so it works whether the repo is cloned in your home dir or under `/opt/`. When it finishes you should see:
 
 ```
-[OK] doorcam.service is running.
+[OK] camera-node.service is running.
 ```
 
 ### Configure
 
-The installer drops a default config at `/etc/doorcam/config.yml` only if one doesn't already exist. The defaults — `640×480 @ 15 fps` on `/dev/video0`, hub at `ws://meer.local:5000`, cam id `front` — work out of the box if your MagicMirror Pi answers to `meer.local`. To change anything:
+The installer drops a default config at `/etc/camera-node/config.yml` only if one doesn't already exist. The defaults — `640×480 @ 15 fps` on `/dev/video0`, hub at `ws://meer.local:5000`, cam id `front` — work out of the box if your MagicMirror Pi answers to `meer.local`. To change anything:
 
 ```bash
-sudoedit /etc/doorcam/config.yml
-sudo systemctl restart doorcam
+sudoedit /etc/camera-node/config.yml
+sudo systemctl restart camera-node
 ```
 
 ### Verify the feed
@@ -143,14 +152,14 @@ sudo systemctl restart doorcam
 Tail the publisher's logs as it connects:
 
 ```bash
-journalctl -fu doorcam
+journalctl -fu camera-node
 ```
 
 You should see:
 
 ```
-INFO doorcam.publisher: Connecting to hub at ws://meer.local:5000/cam/front
-INFO doorcam.publisher: Hub requested state=on
+INFO camera_node.publisher: Connecting to hub at ws://meer.local:5000/cam/front
+INFO camera_node.publisher: Hub requested state=on
 ```
 
 `Hub requested state=off` instead means the hub thinks the camera should be off — check that the MagicMirror Pi is up to date with this repo and has been restarted. The hub defaults new cameras to `on` as soon as they connect.
@@ -174,16 +183,96 @@ http://meer.local:5000/
 If `install.sh` doesn't fit (different init system, custom layout, no sudo, etc.), the underlying steps are:
 
 ```bash
-cd ~/DoorCamera/pi_client
+cd ~/LuxSecurityCamera/camera_node
 python3 -m venv .venv
 .venv/bin/pip install --upgrade pip
 .venv/bin/pip install -r requirements.txt
 sudo usermod -aG video "$USER"          # for /dev/video0 access
-sudo cp config.example.yml /etc/doorcam/config.yml
-.venv/bin/python -m doorcam              # foreground test run; Ctrl+C to stop
+sudo cp config.example.yml /etc/camera-node/config.yml
+.venv/bin/python -m camera_node          # foreground test run; Ctrl+C to stop
 ```
 
 To run it as a service without `install.sh`, write your own systemd unit modelled on what `install.sh` generates — only `User=`, `WorkingDirectory=`, and `ExecStart=` need templating.
+
+---
+
+## 7. Install the hub
+
+Pick whichever box will be the hub — typically the same Pi that runs MagicMirror, but any Linux host with **Node.js 18+** works (a spare Pi 4/5, a NUC, a desktop). On that box:
+
+```bash
+git clone git@github.com:JaredLodwick/DoorCamera.git ~/LuxSecurityCamera
+cd ~/LuxSecurityCamera
+./hub/install.sh
+```
+
+The installer:
+
+- Verifies Node.js >= 18, npm, and systemd are present (warns if `ffmpeg` is missing — recording silently skips, detection still runs).
+- Runs `npm install --omit=dev` inside `hub/` (pulls `onnxruntime-node`, `sharp`, `better-sqlite3`, `ws`, `js-yaml`).
+- Bootstraps `/etc/lux-security-hub/config.yml` from `config.example.yml` — left untouched on re-runs.
+- Generates `/etc/systemd/system/lux-security-hub.service`, enables it, starts it, and verifies.
+
+When it finishes you should see:
+
+```
+[OK] lux-security-hub.service is running.
+```
+
+The hub now listens on **port 5000** (configurable). The dashboard is at `http://<hub-host>:5000/`. Camera nodes connect to `ws://<hub-host>:5000/cam/<cam_id>`.
+
+### Detection (optional, off by default)
+
+Detection is disabled out of the box so a fresh install doesn't burn CPU before you opt in. Two ways to turn it on:
+
+```bash
+# Persistent (survives restart): edit the YAML
+sudoedit /etc/lux-security-hub/config.yml
+# set detection.enabled: true, then:
+sudo systemctl restart lux-security-hub
+
+# Or runtime-only (cleared on next restart):
+curl -X POST -H 'Content-Type: application/json' \
+     -d '{"enabled":true}' http://localhost:5000/detection
+```
+
+The hub's dashboard at `http://<hub-host>:5000/` has a Detection toggle in the header that does the same thing.
+
+If detection fails to start (e.g. `better-sqlite3` was built against a different Node version than the one MagicMirror or the hub uses) the dashboard surfaces the actual error — fix and re-run `./hub/install.sh`.
+
+---
+
+## 8. (Optional) Install the MagicMirror display
+
+Skip this whole section if you don't run MagicMirror. The system is fully usable via the dashboard at `http://<hub-host>:5000/`.
+
+If you do run MagicMirror, on that Pi:
+
+```bash
+git clone git@github.com:JaredLodwick/DoorCamera.git ~/LuxSecurityCamera     # if not already cloned
+cd ~/LuxSecurityCamera
+./mm_module/install.sh
+```
+
+The installer just symlinks `<MagicMirror>/modules/MMM-LuxSecurityDisplay` into the repo. **No `npm install`** — the module is pure browser JS and talks to the hub over `fetch()`. (The script also cleans up the legacy `MMM-DoorCam` symlink from before the architecture split, if it finds one.)
+
+Then add the module to `~/MagicMirror/config/config.js`:
+
+```js
+{
+  module: "MMM-LuxSecurityDisplay",
+  position: "bottom_right",
+  config: {
+    hubUrl: "http://meer.local:5000",   // wherever your hub is reachable
+    camId: "front",                     // matches the camera_node config
+    title: "Door Cam"
+  }
+}
+```
+
+Restart MagicMirror. The module starts polling the hub immediately. Hard-refresh the on-mirror browser (`Ctrl+Shift+R` in the Electron window) the first time so the new JS loads.
+
+See [`mm_module/MMM-LuxSecurityDisplay/README.md`](mm_module/MMM-LuxSecurityDisplay/README.md) for the full config knob list.
 
 ---
 
@@ -193,7 +282,7 @@ Once installed, day-to-day usage looks like this. All HTTP endpoints live on the
 
 ## Viewing the feed
 
-Primary viewer: the `MMM-DoorCam` module on the MagicMirror itself.
+Primary viewer: the `MMM-LuxSecurityDisplay` module on the MagicMirror itself.
 
 For an ad-hoc view from any other device on your LAN:
 
@@ -247,12 +336,12 @@ Returns something like:
 ## Managing the service
 
 ```bash
-sudo systemctl status doorcam      # current state, last few log lines
-sudo systemctl restart doorcam     # pick up config changes
-sudo systemctl stop doorcam
-sudo systemctl start doorcam
-sudo systemctl disable doorcam     # stop auto-starting on boot
-sudo systemctl enable doorcam      # re-enable auto-start
+sudo systemctl status camera-node      # current state, last few log lines
+sudo systemctl restart camera-node     # pick up config changes
+sudo systemctl stop camera-node
+sudo systemctl start camera-node
+sudo systemctl disable camera-node     # stop auto-starting on boot
+sudo systemctl enable camera-node      # re-enable auto-start
 ```
 
 ## Viewing logs
@@ -261,24 +350,32 @@ The Pi client logs to the systemd journal.
 
 ```bash
 # Live tail (Ctrl+C to exit)
-journalctl -u doorcam -f
+journalctl -u camera-node -f
 
 # Last 100 lines
-journalctl -u doorcam -n 100
+journalctl -u camera-node -n 100
 
 # Errors only, this boot
-journalctl -u doorcam -p err -b
+journalctl -u camera-node -p err -b
 ```
 
 ## Updating the code
 
+Each component upgrades independently:
+
 ```bash
-cd ~/DoorCamera
-git pull
-./pi_client/install.sh    # idempotent — re-installs deps and refreshes the service
+# On the camera Pi
+cd ~/LuxSecurityCamera && git pull && ./camera_node/install.sh
+
+# On the hub host
+cd ~/LuxSecurityCamera && git pull && ./hub/install.sh
+
+# On the MagicMirror Pi (optional)
+cd ~/LuxSecurityCamera && git pull && ./mm_module/install.sh
+# then restart MagicMirror + hard-refresh the on-mirror browser
 ```
 
-`install.sh` rewrites `/etc/systemd/system/doorcam.service` and restarts the service for you. It leaves `/etc/doorcam/config.yml` alone, so your custom settings survive.
+All three installers are idempotent — they rewrite the systemd unit and restart the service, but leave existing config files (`/etc/camera-node/config.yml`, `/etc/lux-security-hub/config.yml`) alone so your customizations survive.
 
 ---
 
@@ -297,11 +394,11 @@ Your router or device's DNS setup isn't using mDNS. Three fallbacks:
 ```bash
 ls /dev/video*                    # is the device there?
 v4l2-ctl --list-devices           # is the OS seeing the camera?
-sudo systemctl restart doorcam    # pick up any hot-plug changes
-journalctl -u doorcam -n 50       # look for camera open errors
+sudo systemctl restart camera-node    # pick up any hot-plug changes
+journalctl -u camera-node -n 50       # look for camera open errors
 ```
 
-If `/dev/video0` exists but the service can't open it, check group membership (see "Camera device permissions" in Section 8).
+If `/dev/video0` exists but the service can't open it, the camera-node user isn't in the `video` group: `sudo usermod -aG video $USER && sudo systemctl restart camera-node`.
 
 ### Stream is choppy or slow
 
@@ -314,7 +411,7 @@ camera:
   jpeg_quality: 60
 ```
 
-Then `sudo systemctl restart doorcam`.
+Then `sudo systemctl restart camera-node`.
 
 ### Battery shows `—` in the UI
 
@@ -330,35 +427,74 @@ If the socket test fails, reinstall PiSugar (Section 4).
 ### Service won't start
 
 ```bash
-sudo systemctl status doorcam
-journalctl -u doorcam -n 100
+sudo systemctl status camera-node
+journalctl -u camera-node -n 100
 ```
 
 Most common causes:
-- Wrong paths in `/etc/systemd/system/doorcam.service` — verify `WorkingDirectory` and `ExecStart` point at real files.
+- Wrong paths in `/etc/systemd/system/camera-node.service` — verify `WorkingDirectory` and `ExecStart` point at real files.
 - Missing Python packages — the venv the service points at doesn't have `requirements.txt` installed.
 - `/dev/video0` permission denied — add user to the `video` group.
 
 ### Toggle button in the MagicMirror module does nothing
 
-The browser-side module sends a socket notification to the hub's `node_helper`, which calls `setDesiredState` and forwards `set_state` down the WebSocket to the camera. Things to check, in order:
+The browser-side module just `fetch()`es `POST /cam/<id>/toggle` on the hub. Things to check, in order:
 
 1. `curl http://meer.local:5000/cams` from any LAN host. The camera should appear with `connected: true`. If it doesn't, the camera Pi can't reach the hub.
 2. `curl -X POST http://meer.local:5000/cam/front/toggle` directly. If this works but the in-mirror button doesn't, force-refresh the MagicMirror page (`Ctrl+Shift+R` in the Electron window) — the browser may be running cached old module JS.
-3. If `curl` to the hub also fails, the MagicMirror process or the `MMM-DoorCam` module isn't running on `meer.local`.
+3. If `curl` to the hub also fails, the hub (`lux-security-hub.service`) isn't running on `meer.local`. `sudo systemctl status lux-security-hub`.
 
 ### Camera connects but feed stays off
 
 You'll see this in the camera Pi's logs:
 
 ```
-INFO doorcam.publisher: Connecting to hub at ws://meer.local:5000/cam/front
-INFO doorcam.publisher: Hub requested state=off
+INFO camera_node.publisher: Connecting to hub at ws://meer.local:5000/cam/front
+INFO camera_node.publisher: Hub requested state=off
 ```
 
-The hub is telling the camera to stay off. New cameras default to `on` as soon as they connect, so seeing `state=off` means either:
-- The MagicMirror Pi is running an older version of `MMM-DoorCam` — `git pull` and restart MagicMirror.
-- Someone (UI or curl) explicitly toggled it off. Toggle it back: `curl -X POST -H 'Content-Type: application/json' -d '{"state":"on"}' http://meer.local:5000/cam/front/toggle`.
+The hub is telling the camera to stay off. New cameras default to `on` as soon as they connect, so seeing `state=off` means someone (UI or curl) explicitly toggled it off. Toggle it back:
+
+```bash
+curl -X POST -H 'Content-Type: application/json' \
+     -d '{"state":"on"}' http://meer.local:5000/cam/front/toggle
+```
+
+---
+
+# Migrating from the embedded hub
+
+If you set up an earlier version where the hub server lived inside MagicMirror's `MMM-DoorCam` module, the migration to the standalone hub is mechanical:
+
+```bash
+ssh meer.local
+
+# 1. Stop the old in-MM hub by removing the legacy module from MagicMirror
+#    (or just leave the line commented out — the new ./mm_module/install.sh
+#    cleans up the old MMM-DoorCam symlink).
+
+# 2. Pull the new code and install the standalone hub:
+cd ~/LuxSecurityCamera   # or wherever you have it
+git pull
+./hub/install.sh         # creates lux-security-hub.service, listens on :5000
+
+# 3. (Optional) install the new MagicMirror display module:
+./mm_module/install.sh
+#    then update ~/MagicMirror/config/config.js: rename module to
+#    "MMM-LuxSecurityDisplay" and add `hubUrl: "http://meer.local:5000"`.
+#    Drop the old detection/recording/clipsRoot/dbPath keys — those now
+#    live in /etc/lux-security-hub/config.yml on the hub.
+
+# 4. On the camera Pi, replace the old service with the new one:
+ssh pi@doorcam.local
+cd ~/LuxSecurityCamera
+sudo systemctl disable --now doorcam   # was the old unit name
+./camera_node/install.sh                # registers camera-node.service
+```
+
+The wire protocol between camera and hub is unchanged — `ws://meer.local:5000/cam/<cam_id>` still works exactly the same. Only paths and identifiers moved.
+
+Existing data: clips at `~/Videos/SecurityCamera/` keep working (path unchanged). The events DB moved from `~/.mm-doorcam/events.db` to `~/.luxsecurityhub/events.db` — if you want your historical events back, `mv ~/.mm-doorcam/events.db ~/.luxsecurityhub/events.db` on the hub host before the first start.
 
 ---
 
@@ -378,17 +514,17 @@ This MVP is designed for a **trusted home LAN** only. Things to be aware of befo
 | What you want | Command / URL |
 |---|---|
 | SSH into the camera Pi | `ssh pi@doorcam.local` |
-| Primary viewer | `MMM-DoorCam` module on the MagicMirror itself |
+| Primary viewer | `MMM-LuxSecurityDisplay` module on the MagicMirror itself |
 | Ad-hoc viewer | `http://meer.local:5000/cam/front/stream.mjpg` in any browser |
 | Toggle via CLI | `curl -X POST http://meer.local:5000/cam/front/toggle` |
 | Status JSON | `curl http://meer.local:5000/cam/front/status` |
 | List all cams | `curl http://meer.local:5000/cams` |
 | Hub health | `curl http://meer.local:5000/healthz` |
-| Camera service state | `sudo systemctl status doorcam` |
-| Camera live logs | `journalctl -u doorcam -f` |
-| Restart camera service | `sudo systemctl restart doorcam` |
-| Pull latest code (camera) | `cd ~/DoorCamera && git pull && sudo systemctl restart doorcam` |
-| Edit config | `sudoedit /etc/doorcam/config.yml` (then `sudo systemctl restart doorcam`) |
+| Camera service state | `sudo systemctl status camera-node` |
+| Camera live logs | `journalctl -u camera-node -f` |
+| Restart camera service | `sudo systemctl restart camera-node` |
+| Pull latest code (camera) | `cd ~/LuxSecurityCamera && git pull && ./camera_node/install.sh` |
+| Edit config | `sudoedit /etc/camera-node/config.yml` (then `sudo systemctl restart camera-node`) |
 | Test camera detected | `v4l2-ctl --list-devices` |
 | Test PiSugar socket | `echo "get battery" \| nc -q 0 127.0.0.1 8423` |
 

@@ -1,0 +1,37 @@
+# LuxSecurityHub configuration.
+#
+# Copy this file to /etc/lux-security-hub/config.yml (or anywhere you point
+# $LUXHUB_CONFIG / the first CLI arg at) and tune to taste. Every key has a
+# built-in default; partial files are fine.
+
+hub:
+  port: 5000          # HTTP + WebSocket port. Camera nodes connect to ws://<this-host>:<port>/cam/<id>
+  bindAddr: 0.0.0.0   # listen on all interfaces; use 127.0.0.1 to restrict to localhost
+
+# --- Person detection ---
+# Off by default so a fresh install doesn't burn CPU before the user opts in.
+# Toggle at runtime via:  curl -X POST -H 'Content-Type: application/json' \
+#                              -d '{"enabled":true}' http://localhost:5000/detection
+detection:
+  enabled: false
+  fps: 2                        # detector ticks per second
+  confidence: 0.45              # minimum person-class score to count as a detection
+  classes: ["person"]
+  modelUrl: "https://github.com/JaredLodwick/DoorCamera/releases/download/models-v1/yolov8n-int8.onnx"
+  modelSha256: ""               # set non-empty to enable integrity checking
+
+# --- Per-event video recording ---
+recording:
+  codec: mkv             # "mkv" (MJPEG stream-copy, ~zero CPU) or "h264" (libx264 ultrafast)
+  fps: 15                # matches camera output
+  minClipSeconds: 2      # sub-2s sessions get dropped (false-positive filter)
+  maxClipSeconds: 300    # cap a single clip at 5min; new clip starts after
+  graceMs: 1500          # how long after the last person frame before a session ends
+  retentionDays: 14      # daily sweep deletes events + clips older than this
+
+storage:
+  clipsRoot: "~/Videos/SecurityCamera"     # mkv/mp4 files land here, organized by date
+  dbPath: "~/.luxsecurityhub/events.db"    # SQLite event log
+
+logging:
+  level: info            # debug | info | warn | error
