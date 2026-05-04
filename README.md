@@ -48,53 +48,24 @@ LuxSecurityCamera/
 
 ## Quick start
 
-Each component has its own one-shot installer. Run only the ones you need.
-
-### 1. Hub (one of these)
-
-On whichever box will be the hub — typically a Raspberry Pi 4/5, but any
-Linux host with Node 18+ works:
+One installer, three components. On each device, clone the repo and run
+the installer once — it asks which component to install, sets it up, and
+deletes the other two component directories so the device only carries
+what it actually runs.
 
 ```bash
 git clone https://github.com/JaredLodwick/DoorCamera.git ~/LuxSecurityCamera
 cd ~/LuxSecurityCamera
-./hub/install.sh
+./install.sh
 ```
 
-Installs npm deps (onnxruntime-node, sharp, better-sqlite3, ws, js-yaml),
-bootstraps `/etc/lux-security-hub/config.yml`, and registers a systemd
-unit (`lux-security-hub.service`) that starts on boot and auto-restarts
-on crash. Warns if `ffmpeg` is missing (recording silently skips without
-it; detection still runs).
+Repeat on each device with the appropriate choice:
 
-### 2. Camera node (one per camera)
+- **On the hub host** (a spare Pi 4+, NUC, desktop — anything with Node 18+) → choose **1) hub**.
+- **On each camera Pi** (a Pi Zero 2 W with a USB webcam) → choose **2) camera**. You'll be asked for the hub's URL and a name for this camera.
+- **On a MagicMirror Pi** (optional, only if you want the feed on your mirror) → choose **3) viewer**. You'll be asked for your MagicMirror install path and the hub URL; at the end the installer prints the exact `config.js` snippet to paste in.
 
-On each Raspberry Pi attached to a USB webcam:
-
-```bash
-git clone https://github.com/JaredLodwick/DoorCamera.git ~/LuxSecurityCamera
-cd ~/LuxSecurityCamera
-./camera_node/install.sh
-```
-
-Installs apt + pip deps, adds the user to the `video` group, bootstraps
-`/etc/camera-node/config.yml` (default hub: `ws://meer.local:5000`,
-`cam_id: front` — edit if needed), registers `camera-node.service`.
-
-### 3. (Optional) MagicMirror display
-
-If you also want the feed on a MagicMirror:
-
-```bash
-git clone https://github.com/JaredLodwick/DoorCamera.git ~/LuxSecurityCamera
-cd ~/LuxSecurityCamera
-./mm_module/install.sh
-```
-
-Symlink-only — no npm install. Then add an `MMM-LuxSecurityDisplay` entry
-to `~/MagicMirror/config/config.js` (see
-[`mm_module/MMM-LuxSecurityDisplay/README.md`](mm_module/MMM-LuxSecurityDisplay/README.md))
-and restart MagicMirror.
+Want to run two components on the same physical Pi (e.g. hub + viewer on a single MagicMirror Pi)? Clone the repo into a second directory and run the installer again with the other choice.
 
 ### Verify
 
@@ -109,9 +80,17 @@ Then open `http://<hub-host>:5000/` for the events dashboard. Walk past
 the camera and you should see a new event appear with a clip you can play
 inline.
 
-All three installers are **idempotent** — re-run them after `git pull` to
-upgrade. The installers leave existing config files alone so your
-customizations survive.
+### Upgrading
+
+Each component upgrades by pulling and re-running its own installer:
+
+```bash
+cd ~/LuxSecurityCamera && git pull && ./hub/install.sh           # on the hub host
+cd ~/LuxSecurityCamera && git pull && ./camera_node/install.sh   # on a camera Pi
+cd ~/LuxSecurityCamera && git pull && ./mm_module/install.sh     # on the MagicMirror Pi
+```
+
+(After `./install.sh` cleanup, only the surviving component's installer is present — that's the right one to use for upgrades on that box.) All three are idempotent and leave existing config files alone.
 
 ## Migrating from the embedded-hub setup
 

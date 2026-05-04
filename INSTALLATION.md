@@ -14,9 +14,46 @@ The system has three independent components:
   module that displays one camera's live feed on your MagicMirror. Lives
   in `mm_module/MMM-LuxSecurityDisplay/`.
 
-The walkthrough below installs all three. If you don't have a MagicMirror,
-skip Section 11. If your hub is the same physical box as your MagicMirror,
-the hub install just adds a second systemd unit alongside MM.
+---
+
+## 0. The fast path — unified installer
+
+On each device, clone the repo and run **one** installer at the root that
+asks which component to set up:
+
+```bash
+git clone https://github.com/JaredLodwick/DoorCamera.git ~/LuxSecurityCamera
+cd ~/LuxSecurityCamera
+./install.sh
+```
+
+The installer:
+
+1. Asks which component to install (1 = hub, 2 = camera, 3 = viewer).
+2. For **camera**: prompts for the hub URL and a camera ID, writes
+   `/etc/camera-node/config.yml`, then runs `camera_node/install.sh`.
+3. For **viewer**: checks MagicMirror is installed (asks for the path),
+   then runs `mm_module/install.sh` and prints the exact `config.js`
+   snippet to paste in.
+4. For **hub**: just runs `hub/install.sh`. Detection stays off until
+   you opt in via the dashboard or the YAML config.
+5. Offers to delete the other two component directories from this
+   checkout (default Yes), so the device only carries what it actually
+   runs.
+6. Prints the dashboard URL and any next steps.
+
+**Want both hub and viewer on the same MagicMirror Pi?** Clone the repo
+into a second directory and run `./install.sh` again with the other
+choice. (Or decline the cleanup step; both component directories survive
+side by side.)
+
+That's it for the typical install. The rest of this document is the
+deep-dive — prerequisites, the manual steps each sub-installer takes
+under the hood, troubleshooting, and migration notes.
+
+---
+
+## Prerequisites
 
 This manual assumes both Pis are already:
 - Flashed with Raspberry Pi OS Lite 64-bit (Bookworm or later)
