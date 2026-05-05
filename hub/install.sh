@@ -72,6 +72,160 @@ if [[ ! -f "$INSTALL_DIR/package.json" ]]; then
     exit 1
 fi
 
+#--- pre-flight: detect existing hubs ----------------------------------------
+#
+# Two checks before we touch anything on disk:
+#   1. Probe localhost:5000 — catches re-installs on the same machine. The
+#      right answer here is almost always "yes, continue" (the installer is
+#      idempotent and preserves config + DB), so we encourage it.
+#   2. Ask whether the user already has a hub elsewhere on the network. If
+#      yes, probe their URL and walk them through migration / recovery /
+#      both-intentional scenarios so they don't blindly stand up a second
+#      hub when the right move is "fix the existing one."
+#
+# Skipped on the second pass after `exec sudo` (Linux), so the user is only
+# prompted once per install attempt.
+
+probe_hub () {
+    # Returns 0 iff the URL responds like a LuxSecurityHub.
+    # Two-shot probe: /healthz returns "ok" AND /cams returns a JSON array.
+    # Stronger than just /healthz so we don't false-positive on random
+    # services that happen to expose /healthz.
+    local url="$1" healthz cams
+    command -v curl >/dev/null 2>&1 || return 1
+    healthz=$(curl -fs --max-time 2 "$url/healthz" 2>/dev/null) || return 1
+    [[ "$healthz" == "ok" ]] || return 1
+    cams=$(curl -fs --max-time 2 "$url/cams" 2>/dev/null) || return 1
+    [[ "$cams" == \[* ]] || return 1
+    return 0
+}
+
+guess_existing_hub_port () {
+    # If a config file already exists from a prior install, use its hub.port.
+    # Otherwise default to 5000. We don't pull in a YAML parser — a tiny
+    # awk regex against `port: <n>` under the `hub:` block is fine.
+    local cfg
+    for cfg in "$HOME/.config/luxsecurityhub/config.yml" "/etc/lux-security-hub/config.yml"; do
+        if [[ -r "$cfg" ]]; then
+            local port
+            port=$(awk '
+                /^hub:/ { in_hub = 1; next }
+                /^[^[:space:]]/ { in_hub = 0 }
+                in_hub && /^[[:space:]]+port:/ {
+                    gsub(/[^0-9]/, "")
+                    print
+                    exit
+                }
+            ' "$cfg")
+            if [[ "$port" =~ ^[0-9]+$ ]]; then
+                echo "$port"
+                return
+            fi
+        fi
+    done
+    echo 5000
+}
+
+confirm_default () {
+    # confirm_default "Question" "Y|N"  →  exits 0 on Y-equivalent answer.
+    local prompt="$1" default="${2:-Y}" input
+    read -rp "$prompt: " input
+    input="${input:-$default}"
+    [[ "$input" =~ ^[Yy]$ ]]
+}
+
+run_preflight_existing_hub_checks () {
+    if [[ -n "${LUX_PREFLIGHT_DONE:-}" ]]; then return 0; fi
+
+    # 1. localhost probe — re-install case
+    local local_port; local_port=$(guess_existing_hub_port)
+    local local_url="http://localhost:${local_port}"
+    if probe_hub "$local_url"; then
+        cat <<EOF
+
+==============================================================
+ Existing hub detected on this machine
+==============================================================
+A LuxSecurityHub is already running at $local_url/.
+This looks like a re-install — which is the right move for almost
+every problem you might be having:
+
+  * The installer is idempotent. Re-running it rewrites the systemd
+    unit / LaunchAgent and restarts the service.
+  * Your existing config (~/.config/luxsecurityhub/config.yml or
+    /etc/lux-security-hub/config.yml) is left untouched, so your
+    customizations survive.
+  * The events database and recorded clips are preserved.
+
+If the hub is misbehaving, before re-installing it's worth peeking at
+the logs first:
+    Linux:  journalctl -fu lux-security-hub
+    macOS:  tail -f ~/Library/Logs/LuxSecurityHub.err.log
+
+EOF
+        if ! confirm_default "Continue with re-install? [Y/n]" "Y"; then
+            echo "Aborted — nothing changed."
+            exit 0
+        fi
+    fi
+
+    # 2. cross-network probe — second-hub case
+    echo
+    local has_remote
+    read -rp "Do you already have a hub running on ANOTHER machine on your network? [y/N]: " has_remote
+    if [[ "$has_remote" =~ ^[Yy]$ ]]; then
+        local remote_url
+        read -rp "What's its URL? [http://meer.local:5000]: " remote_url
+        remote_url="${remote_url:-http://meer.local:5000}"
+        echo "==> Probing $remote_url ..."
+        if probe_hub "$remote_url"; then
+            cat <<EOF
+
+Confirmed: a LuxSecurityHub is responding at $remote_url
+
+You're about to install a SECOND hub on this network. Three reasons
+people end up doing this — pick the one that fits, then decide.
+
+  ▸ MIGRATING hardware (e.g., moving from old Pi to new desktop):
+    Install here, then update each camera_node's config to point at
+    this new host:
+        sudoedit /etc/camera-node/config.yml
+    Set 'hub.url' to ws://<this-host>:5000. Then stop the old hub:
+        ssh user@old-host 'sudo systemctl disable --now lux-security-hub'   # Linux
+        ssh user@old-host 'launchctl unload ~/Library/LaunchAgents/com.luxsecurityhub.plist'   # macOS
+    Don't forget to also update your MagicMirror module's hubUrl, if
+    you use it.
+
+  ▸ RECOVERING from a broken install:
+    Stop. The hub installer is idempotent — re-running it on the old
+    machine almost always fixes things. Most "broken hub" symptoms
+    are config-related, not install-corruption. Try:
+        ssh user@old-host 'cd ~/LuxSecurityCamera && git pull && ./hub/install.sh'
+    Check logs first if it's still broken:
+        ssh user@old-host 'journalctl -fu lux-security-hub'   # Linux
+        ssh user@old-host 'tail -f ~/Library/Logs/LuxSecurityHub.err.log'   # macOS
+
+  ▸ Running BOTH intentionally:
+    Technically supported. Each camera_node connects to exactly one
+    hub. Clip storage and the events database are NOT shared between
+    hubs. You'll be managing two completely independent setups.
+
+EOF
+            if ! confirm_default "Continue installing a second hub on this machine? [y/N]" "N"; then
+                echo "Aborted — nothing changed."
+                exit 0
+            fi
+        else
+            echo "  Couldn't reach a hub at $remote_url — proceeding anyway."
+            echo "  (Maybe the URL is wrong, or the old hub is offline.)"
+        fi
+    fi
+
+    export LUX_PREFLIGHT_DONE=1
+}
+
+run_preflight_existing_hub_checks
+
 #============================================================================
 # LINUX  — systemd
 #============================================================================
