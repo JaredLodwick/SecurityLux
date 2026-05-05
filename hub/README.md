@@ -16,44 +16,124 @@ The hub is just one Node.js process. It can run on:
 
 - A spare Raspberry Pi (4 8 GB recommended for detection).
 - The same Pi that runs MagicMirror (alongside MM, as a separate systemd unit).
-- A desktop / NUC / x86 box on the same LAN.
+- A desktop / NUC / x86 Linux box on the same LAN.
+- A **Mac** (macOS, Apple Silicon or Intel) — installed as a launchd LaunchAgent.
+- A **Windows** PC — manual install (see below).
 
-## Install (Linux, systemd)
+## Install — Linux & macOS
+
+The same installer covers both. Clone and run:
 
 ```bash
-git clone https://github.com/JaredLodwick/DoorCamera.git ~/DoorCamera
-cd ~/DoorCamera
+git clone https://github.com/JaredLodwick/DoorCamera.git ~/LuxSecurityCamera
+cd ~/LuxSecurityCamera
 ./hub/install.sh
 ```
 
-The installer:
+It detects your OS and dispatches:
 
-1. Verifies Node.js >= 18, npm, and systemd are present (warns if `ffmpeg`
-   is missing — detection still works, recording silently skips).
-2. `npm install`s the hub's deps (`onnxruntime-node`, `sharp`,
-   `better-sqlite3`, `ws`, `js-yaml`).
+**Linux (systemd):**
+
+1. Verifies Node.js >= 18, npm, and systemd. Warns if `ffmpeg` is missing
+   (detection still works, recording silently skips without it).
+2. `npm install --omit=dev` inside `hub/` (pulls `onnxruntime-node`,
+   `sharp`, `better-sqlite3`, `ws`, `js-yaml`).
 3. Bootstraps `/etc/lux-security-hub/config.yml` from `config.example.yml`
    (only if absent — re-runs preserve customization).
-4. Generates `/etc/systemd/system/lux-security-hub.service` with your user
-   + the install path templated in. `Restart=on-failure`, comes back on
+4. Generates `/etc/systemd/system/lux-security-hub.service` with your
+   user + install path templated in. `Restart=on-failure`, comes back on
    reboot.
-5. Enables, starts, and verifies the service. Prints a summary of useful
-   commands at the end.
+5. Enables, starts, and verifies. Prints a summary of useful commands.
 
-It is idempotent: re-run after `git pull` to upgrade.
+**macOS (launchd LaunchAgent):**
 
-## Run without systemd (dev)
+1. Same Node + npm sanity checks. Warns if `ffmpeg` is missing
+   (`brew install ffmpeg`).
+2. `npm install --omit=dev` inside `hub/`.
+3. Bootstraps `~/.config/luxsecurityhub/config.yml` from `config.example.yml`.
+   No sudo needed for any of this — everything is per-user.
+4. Writes `~/Library/LaunchAgents/com.luxsecurityhub.plist` with `RunAtLoad`
+   and `KeepAlive` on Crashed.
+5. `launchctl load -w` it; verifies; prints useful commands.
+
+> **macOS gotcha — port 5000.** Modern macOS runs an AirPlay Receiver on
+> port 5000 by default. If the hub log shows
+> `EADDRINUSE: address already in use 0.0.0.0:5000`, either:
+> - Disable AirPlay Receiver: System Settings → General → AirDrop & Handoff
+> - Or change the hub port: edit `~/.config/luxsecurityhub/config.yml`
+>   and set `hub.port: 5001` (or anything free), then
+>   `launchctl unload ~/Library/LaunchAgents/com.luxsecurityhub.plist`
+>   and `launchctl load -w …` to restart.
+
+The macOS install runs the hub as a **LaunchAgent** (per-user). It comes
+back when you log in. Most Macs auto-login the user on boot, so the hub
+is back after a restart. For "boot before login" behavior, install as a
+LaunchDaemon under `/Library/LaunchDaemons/` instead — that requires
+sudo + manual plist work; the installer doesn't do it for you.
+
+The Linux + macOS installer is **idempotent** — re-run after `git pull`
+to upgrade.
+
+## Install — Windows
+
+There's no auto-installer for Windows yet. Clone, install deps, and run
+manually — or wrap it in a Windows Service yourself.
+
+```powershell
+# In an admin PowerShell (or a regular one if Node is on PATH):
+git clone https://github.com/JaredLodwick/DoorCamera.git C:\LuxSecurityCamera
+cd C:\LuxSecurityCamera\hub
+npm install --omit=dev
+
+# Optional: install ffmpeg via Chocolatey or Scoop for clip recording
+#   choco install ffmpeg
+#   scoop install ffmpeg
+
+# Foreground (for testing):
+node src\hub.js
+```
+
+Open `http://localhost:5000/` to see the dashboard.
+
+To run it as a background service that survives reboots, the easiest
+approach is [NSSM](https://nssm.cc/) ("the non-sucking service manager"):
+
+```powershell
+# After downloading NSSM and putting nssm.exe on your PATH:
+nssm install LuxSecurityHub "C:\Program Files\nodejs\node.exe" "C:\LuxSecurityCamera\hub\src\hub.js"
+nssm set    LuxSecurityHub AppDirectory "C:\LuxSecurityCamera\hub"
+nssm set    LuxSecurityHub AppEnvironmentExtra "LUXHUB_CONFIG=%USERPROFILE%\.config\luxsecurityhub\config.yml"
+nssm set    LuxSecurityHub AppStdout "%USERPROFILE%\AppData\Local\LuxSecurityHub\stdout.log"
+nssm set    LuxSecurityHub AppStderr "%USERPROFILE%\AppData\Local\LuxSecurityHub\stderr.log"
+nssm start  LuxSecurityHub
+
+# Bootstrap the config dir if it doesn't exist yet:
+mkdir "$env:USERPROFILE\.config\luxsecurityhub"
+copy config.example.yml "$env:USERPROFILE\.config\luxsecurityhub\config.yml"
+```
+
+Manage with `nssm restart LuxSecurityHub`, `nssm stop LuxSecurityHub`, etc.
+
+A first-class `install.ps1` is on the roadmap; PRs welcome.
+
+## Run without a service manager (dev / testing, any OS)
 
 ```bash
 cd hub
 npm install
-node src/hub.js                                   # uses /etc/lux-security-hub/config.yml or built-in defaults
+node src/hub.js                                   # uses ~/.config/luxsecurityhub/config.yml or built-in defaults
 LUXHUB_CONFIG=/tmp/luxhub.yml node src/hub.js     # or point at any YAML
 node src/hub.js /path/to/config.yml               # or pass it as a CLI arg
 ```
 
-The hub binds to `0.0.0.0:5000` by default. Open `http://<host>:5000/` for
-the events dashboard.
+The hub binds to `0.0.0.0:5000` by default. Open `http://<host>:5000/`
+for the events dashboard. Config search order:
+
+1. CLI arg (`node src/hub.js /path/to/config.yml`)
+2. `$LUXHUB_CONFIG` env var
+3. `~/.config/luxsecurityhub/config.yml` (user-level; cross-OS)
+4. `/etc/lux-security-hub/config.yml` (system-level; Linux/systemd)
+5. Built-in defaults (with a `config file not found` warning)
 
 ## HTTP endpoints
 

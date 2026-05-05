@@ -4,23 +4,29 @@
 /**
  * LuxSecurityHub entry point.
  *
- * Loads YAML config in this order:
- *   1. CLI arg:   `node src/hub.js /path/to/config.yml`
- *   2. Env var:   $LUXHUB_CONFIG
- *   3. Default:   /etc/lux-security-hub/config.yml
+ * Resolves the config file by checking, in order:
+ *   1. CLI arg:    `node src/hub.js /path/to/config.yml`
+ *   2. Env var:    $LUXHUB_CONFIG
+ *   3. Default search path (first one that exists):
+ *        ~/.config/luxsecurityhub/config.yml   (user-level; macOS, Linux, …)
+ *        /etc/lux-security-hub/config.yml      (system-level; Linux/systemd)
  *
- * Falls through to built-in defaults (see `config.example.yml`) if the file
- * is missing — useful for `node src/hub.js` smoke tests on a dev box.
+ * Falls through to built-in defaults (see `config.example.yml`) if no file
+ * is found — useful for `node src/hub.js` smoke tests on a dev box.
  */
 
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const yaml = require("js-yaml");
 
 const log = require("./log");
 const { HubServer } = require("./server");
 
-const DEFAULT_CONFIG_PATH = "/etc/lux-security-hub/config.yml";
+const DEFAULT_CONFIG_PATHS = [
+    path.join(os.homedir(), ".config", "luxsecurityhub", "config.yml"),
+    "/etc/lux-security-hub/config.yml"
+];
 
 const DEFAULT_CONFIG = {
     hub: { port: 5000, bindAddr: "0.0.0.0" },
@@ -64,7 +70,12 @@ function deepMerge(base, overlay) {
 function resolveConfigPath() {
     if (process.argv[2]) return process.argv[2];
     if (process.env.LUXHUB_CONFIG) return process.env.LUXHUB_CONFIG;
-    return DEFAULT_CONFIG_PATH;
+    for (const candidate of DEFAULT_CONFIG_PATHS) {
+        if (fs.existsSync(candidate)) return candidate;
+    }
+    // None of the defaults exist — return the first so the warn message is
+    // specific about where we expected to find one.
+    return DEFAULT_CONFIG_PATHS[0];
 }
 
 function loadConfig() {

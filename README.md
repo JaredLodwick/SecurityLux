@@ -61,7 +61,7 @@ cd ~/LuxSecurityCamera
 
 Repeat on each device with the appropriate choice:
 
-- **On the hub host** (a spare Pi 4+, NUC, desktop — anything with Node 18+) → choose **1) hub**.
+- **On the hub host** — a spare Pi 4+, NUC, Linux box, **or a Mac** (Apple Silicon or Intel). Anything with Node 18+ works. → choose **1) hub**. Windows users: see [`hub/README.md`](hub/README.md#install--windows) for the manual install path.
 - **On each camera Pi** (a Pi Zero 2 W with a USB webcam) → choose **2) camera**. You'll be asked for the hub's URL and a name for this camera.
 - **On a MagicMirror Pi** (optional, only if you want the feed on your mirror) → choose **3) viewer**. You'll be asked for your MagicMirror install path and the hub URL; at the end the installer prints the exact `config.js` snippet to paste in.
 

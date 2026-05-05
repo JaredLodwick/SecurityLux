@@ -91,8 +91,10 @@ Which component do you want to install?
 
   1) hub      The central server. Receives streams from all camera
               nodes, runs person detection, records clips, serves the
-              dashboard. ONE per network. Needs a Pi 4 (8GB ideal),
-              Pi 5, NUC, or any Linux box with Node.js 18+.
+              dashboard. ONE per network. Runs on Linux (Pi 4/5, NUC,
+              desktop) or macOS (Apple Silicon or Intel). Needs
+              Node.js 18+. Windows: see hub/README.md for manual
+              install.
 
   2) camera   A camera publisher. Runs on a Raspberry Pi at a doorway
               with a USB webcam. Pi Zero 2 W works great. ONE per
