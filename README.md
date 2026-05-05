@@ -62,8 +62,11 @@ installer prints the exact `config.js` snippet to paste in.
 You don't need MagicMirror — the hub's built-in dashboard is the primary
 UI for the system.
 
-> **Want both hub and viewer on the same Pi?** Clone the repo into a
-> second directory and run `./install.sh` again with the other choice.
+> **Want both hub and viewer on the same Pi?** Just re-run `./install.sh`
+> on that machine and pick the other component. The installer leaves
+> both the `hub/` and `mm_module/` packages on disk for exactly this
+> case — only `camera_node/` gets removed (it never runs on the same
+> machine as the hub or viewer). No re-cloning needed.
 
 ---
 

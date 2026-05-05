@@ -37,15 +37,20 @@ The installer:
    snippet to paste in.
 4. For **hub**: just runs `hub/install.sh`. Detection stays off until
    you opt in via the dashboard or the YAML config.
-5. Offers to delete the other two component directories from this
-   checkout (default Yes), so the device only carries what it actually
-   runs.
+5. Cleans up unused components from the checkout. The rules:
+   - **hub** install or **viewer** install → only `camera_node/` is
+     removed. The `hub/` and `mm_module/` directories both stay so you
+     can re-run `./install.sh` later and add the other one without
+     re-cloning. (This is the typical setup for a MagicMirror Pi
+     hosting both the hub service and the on-mirror display.)
+   - **camera** install → both `hub/` and `mm_module/` are removed.
+     A camera_node lives on dedicated hardware (a Pi Zero with a USB
+     webcam); the other components have no business there.
 6. Prints the dashboard URL and any next steps.
 
-**Want both hub and viewer on the same MagicMirror Pi?** Clone the repo
-into a second directory and run `./install.sh` again with the other
-choice. (Or decline the cleanup step; both component directories survive
-side by side.)
+**Want both hub and viewer on the same MagicMirror Pi?** Just re-run
+`./install.sh` on that Pi after the first install completes and pick
+the other component. No re-cloning needed.
 
 That's it for the typical install. The rest of this document is the
 deep-dive — prerequisites, the manual steps each sub-installer takes

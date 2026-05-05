@@ -76,11 +76,12 @@ cat <<'EOF'
 =============================================================
  LuxSecurityCamera installer
 =============================================================
- This installs ONE of the three components on this device.
- To run multiple components on the same machine (e.g. a hub
- + a MagicMirror display on the same Pi), clone the repo
- again into a separate directory and run this installer
- once per component.
+ Pick ONE component to install on this device.
+
+ Running both the hub and the MagicMirror display on the same
+ Pi is a common setup — re-run this installer afterwards and
+ pick the other one. The installer leaves both packages on
+ disk for that case so you don't have to re-clone the repo.
 
 EOF
 
@@ -201,14 +202,30 @@ EOF
 esac
 
 #--- 3. cleanup ---------------------------------------------------------------
+#
+# Only the camera_node ever lives in isolation — that hardware (a Pi Zero
+# with a USB webcam) doesn't sensibly host the hub or the MagicMirror
+# display. Hub-vs-viewer is a different story: the most common deployment
+# is a single MagicMirror Pi running BOTH the hub (as a separate service)
+# AND the viewer (as a MagicMirror module). We keep both packages on disk
+# so the user can re-run `./install.sh` later and pick the other one
+# without re-cloning.
 
 case "$COMPONENT" in
-    hub)    KEEP="hub";          OTHERS=("camera_node" "mm_module") ;;
-    camera) KEEP="camera_node";  OTHERS=("hub" "mm_module") ;;
-    viewer) KEEP="mm_module";    OTHERS=("hub" "camera_node") ;;
+    hub|viewer)
+        # Both hub and viewer live on the same kind of machine (a regular
+        # Linux/macOS host). Keep each other's directories around.
+        OTHERS=("camera_node")
+        ;;
+    camera)
+        # A camera_node is dedicated hardware — neither the hub nor the
+        # viewer have any business running on a Pi Zero with a webcam.
+        OTHERS=("hub" "mm_module")
+        ;;
 esac
 
-# Only offer to remove dirs that actually exist.
+# Only offer to remove dirs that actually exist (re-runs may already have
+# pruned some).
 existing=()
 for dir in "${OTHERS[@]}"; do
     [[ -d "$REPO_DIR/$dir" ]] && existing+=("$dir")
@@ -219,13 +236,35 @@ if (( ${#existing[@]} > 0 )); then
     echo "----------------------------------------------"
     echo " Cleanup"
     echo "----------------------------------------------"
-    echo "This device only needs the '$KEEP' component."
-    echo "Remove the unused component director$([[ ${#existing[@]} -eq 1 ]] && echo "y" || echo "ies"):"
+    case "$COMPONENT" in
+        hub)
+            echo "This is a hub install. The camera_node package isn't needed here"
+            echo "(it only runs on a Pi with an attached USB webcam)."
+            echo
+            echo "The mm_module/ directory is left in place so you can re-run"
+            echo "./install.sh later to add the MagicMirror display on this same"
+            echo "machine without re-cloning the repo."
+            ;;
+        viewer)
+            echo "This is a viewer install. The camera_node package isn't needed"
+            echo "here (it only runs on a Pi with an attached USB webcam)."
+            echo
+            echo "The hub/ directory is left in place so you can re-run"
+            echo "./install.sh later to also run the hub on this same machine"
+            echo "without re-cloning the repo."
+            ;;
+        camera)
+            echo "This is a camera_node install. Neither the hub nor the viewer"
+            echo "package belongs on a dedicated camera Pi."
+            ;;
+    esac
+    echo
+    echo "Remove the following director$([[ ${#existing[@]} -eq 1 ]] && echo "y" || echo "ies") from this checkout:"
     for dir in "${existing[@]}"; do
         echo "    $REPO_DIR/$dir"
     done
     echo
-    if confirm "Remove them now? [Y/n]"; then
+    if confirm "Remove now? [Y/n]"; then
         for dir in "${existing[@]}"; do
             rm -rf "${REPO_DIR:?}/$dir"
             echo "    removed $dir/"
@@ -272,6 +311,10 @@ Person detection is OFF by default. To turn it on:
 Logs:           journalctl -fu lux-security-hub
 Config:         sudoedit /etc/lux-security-hub/config.yml
                 (then: sudo systemctl restart lux-security-hub)
+
+If you ALSO want to display a camera on a MagicMirror running on this
+same machine, just re-run this installer and pick option 3 (viewer):
+    cd $REPO_DIR && ./install.sh
 EOF
         ;;
 
@@ -323,7 +366,11 @@ Inside the modules: [ ... ] array, paste:
 
 Then restart MagicMirror.
 
-You can also browse all cameras + recorded events in the hub's dashboard:
+If this same machine should ALSO run the hub itself, just re-run this
+installer and pick option 1 (hub):
+    cd $REPO_DIR && ./install.sh
+
+You can browse all cameras + recorded events in the hub's dashboard:
     $HUB_URL
 EOF
         ;;
