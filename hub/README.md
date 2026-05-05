@@ -168,6 +168,7 @@ for the events dashboard. Config search order:
 | `GET`  | `/cam/<id>/status`                 | Status for one camera (state, connected, fps, battery, current_detection, …). |
 | `GET`  | `/cam/<id>/stream.mjpg`            | Multipart MJPEG stream of the buffered frames. |
 | `POST` | `/cam/<id>/toggle`                 | Body `{"state":"on"\|"off"}` to set; no body to flip. |
+| `POST` | `/cam/<id>/detection`              | Body `{"enabled": bool}` — per-camera detection mute. The hub-wide `/detection` endpoint controls whether the detector worker runs at all; this finer-grained gate just hides one camera's frames from inference. |
 | `GET`  | `/cam/<id>/events?since=&limit=`   | Detection events list (paginated, newest first). |
 | `GET`  | `/events/<id>`                     | Single event JSON. |
 | `GET`  | `/events/<id>/clip.<ext>`          | Streams the recorded clip with `Range` support. |

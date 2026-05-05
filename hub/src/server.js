@@ -141,6 +141,7 @@ class HubServer {
             cam = {
                 id: camId,
                 desiredState: "on",
+                detectionEnabled: true,        // per-cam runtime flag; toggled via POST /cam/<id>/detection
                 lastJpeg: null,
                 lastJpegAt: 0,
                 status: null,
@@ -242,6 +243,11 @@ class HubServer {
     _onDetection (obs) {
         if (!obs || !obs.camId) return;
         const cam = this.getCam(obs.camId);
+        // Per-cam detection mute: don't update lastDetection (no bbox overlay)
+        // and don't feed observations to the session manager (no clip
+        // recording). The detector also short-circuits earlier on this flag,
+        // so this is belt-and-suspenders.
+        if (cam.detectionEnabled === false) return;
         if (obs.hasPerson) {
             cam.lastDetection = {
                 class: obs.cls || "person",
@@ -370,7 +376,8 @@ class HubServer {
             on_battery: reported.on_battery ?? null,
             camera_available: reported.camera_available ?? null,
             last_frame_age_ms: cam.lastJpegAt ? now - cam.lastJpegAt : null,
-            current_detection: detectionFresh ? cam.lastDetection : null
+            current_detection: detectionFresh ? cam.lastDetection : null,
+            detection_enabled: cam.detectionEnabled !== false
         };
     }
 
@@ -427,7 +434,7 @@ class HubServer {
             return;
         }
 
-        const camMatch = pathname.match(/^\/cam\/([^/]+)\/(status|toggle|stream\.mjpg)$/);
+        const camMatch = pathname.match(/^\/cam\/([^/]+)\/(status|toggle|detection|stream\.mjpg)$/);
         if (camMatch) {
             const camId = decodeURIComponent(camMatch[1]);
             const action = camMatch[2];
@@ -452,6 +459,25 @@ class HubServer {
                     this.setDesiredState(camId, desired);
                     res.writeHead(200, { "Content-Type": "application/json" });
                     res.end(JSON.stringify({ state: desired }));
+                });
+                return;
+            }
+            if (action === "detection" && req.method === "POST") {
+                // Per-cam runtime detection mute. Body: { enabled: boolean }.
+                // The global /detection endpoint controls whether the detector
+                // worker runs at all; this endpoint is a finer-grained gate
+                // that just hides one camera's frames from the detector.
+                this.readJsonBody(req, (body) => {
+                    if (!body || typeof body.enabled !== "boolean") {
+                        res.writeHead(400, { "Content-Type": "application/json" });
+                        res.end(JSON.stringify({ error: "body must be { enabled: boolean }" }));
+                        return;
+                    }
+                    const cam = this.getCam(camId);
+                    cam.detectionEnabled = body.enabled;
+                    this.log.info(`per-cam detection ${cam.detectionEnabled ? "enabled" : "disabled"} for ${camId}`);
+                    res.writeHead(200, { "Content-Type": "application/json" });
+                    res.end(JSON.stringify(this.statusFor(camId)));
                 });
                 return;
             }

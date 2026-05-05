@@ -10,11 +10,14 @@
     --bg: #0d0d0e;
     --card: #18181b;
     --card-hover: #1f1f23;
+    --rail: #131316;
     --border: #2a2a2e;
     --text: #e5e5e5;
     --text-muted: #888;
+    --text-dim: #555;
     --accent: #00ff88;
     --accent-dim: rgba(0, 255, 136, 0.14);
+    --accent-glow: rgba(0, 255, 136, 0.45);
     --error: #c66;
     --error-dim: rgba(204, 102, 102, 0.16);
   }
@@ -31,6 +34,10 @@
     min-height: 100vh;
   }
 
+  /* ============================================================
+     Header
+     ============================================================ */
+
   header {
     border-bottom: 1px solid var(--border);
     padding: 14px 24px;
@@ -40,98 +47,51 @@
     gap: 16px;
     flex-wrap: wrap;
   }
-
   header h1 {
     margin: 0;
     font-size: 1rem;
-    font-weight: 500;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
+    font-weight: 400;
+    letter-spacing: 0;
   }
-  header h1 .accent { color: var(--accent); margin: 0 6px; }
-
-  .header-meta {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    font-size: 0.8rem;
+  header h1 .brand {
+    font-weight: 700;
+  }
+  header h1 .section {
     color: var(--text-muted);
-    flex-wrap: wrap;
+    margin-left: 12px;
   }
-
-  /* iOS-style toggle for detection on/off. */
-  .toggle {
+  .system-status {
     display: inline-flex;
     align-items: center;
     gap: 8px;
-    cursor: pointer;
-    user-select: none;
+    color: var(--text-muted);
+    font-size: 0.85rem;
   }
-  .toggle input { position: absolute; opacity: 0; pointer-events: none; }
-  .toggle .toggle-label { color: var(--text); font-size: 0.85rem; }
-  .toggle-track {
-    position: relative;
-    width: 36px;
-    height: 18px;
-    background: #2a2a2e;
-    border-radius: 9px;
-    transition: background 0.2s;
-    flex-shrink: 0;
-  }
-  .toggle-thumb {
-    position: absolute;
-    top: 2px;
-    left: 2px;
-    width: 14px;
-    height: 14px;
+  .system-status .system-dot {
+    width: 8px;
+    height: 8px;
     border-radius: 50%;
-    background: #888;
-    transition: left 0.18s, background 0.18s;
+    background: var(--text-dim);
+    transition: background 0.3s;
   }
-  .toggle input:checked ~ .toggle-track { background: var(--accent-dim); }
-  .toggle input:checked ~ .toggle-track .toggle-thumb {
-    left: 20px;
+  .system-status[data-state="ok"] .system-dot {
     background: var(--accent);
-    box-shadow: 0 0 6px rgba(0, 255, 136, 0.5);
+    box-shadow: 0 0 6px var(--accent-glow);
   }
-  .toggle.is-pending .toggle-thumb { opacity: 0.5; }
-  .toggle.is-error ~ .toggle-track { background: var(--error-dim); }
-
-  button {
-    background: transparent;
-    color: var(--text);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 6px 12px;
-    font-size: 0.8rem;
-    font-family: inherit;
-    cursor: pointer;
-    transition: background 0.15s, border-color 0.15s, color 0.15s;
+  .system-status[data-state="error"] .system-dot {
+    background: var(--error);
   }
-  button:hover {
-    border-color: var(--text-muted);
-    background: var(--card-hover);
-    color: #fff;
-  }
-  button:active { transform: translateY(1px); }
-  button:disabled { opacity: 0.5; cursor: not-allowed; }
 
   main {
-    max-width: 820px;
+    max-width: 1280px;
     margin: 0 auto;
-    padding: 20px 24px 40px;
+    padding: 22px 28px 40px;
   }
 
-  .section-label {
-    font-size: 0.7rem;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-    margin: 16px 0 8px;
-  }
-  main > .section-label:first-child { margin-top: 0; }
+  /* ============================================================
+     Banner (detection error etc.)
+     ============================================================ */
 
-  /* Detection error banner under the header. */
   .banner {
     background: var(--error-dim);
     border: 1px solid rgba(204, 102, 102, 0.4);
@@ -154,134 +114,342 @@
     font-size: 0.85em;
   }
 
-  /* Cameras section. */
-  .cameras {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-    gap: 12px;
-    margin-bottom: 8px;
+  /* ============================================================
+     Page header (per-view title row)
+     ============================================================ */
+
+  .page-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 16px;
+    min-height: 32px;
   }
-  .camera {
+  .page-header-left {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+  }
+  .page-header h2 {
+    margin: 0;
+    font-size: 1.1rem;
+    font-weight: 700;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .page-header h2 .cam-state-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--text-dim);
+  }
+  .page-header h2 .cam-state-dot[data-state="on"] {
+    background: var(--accent);
+    box-shadow: 0 0 6px var(--accent-glow);
+  }
+  .page-header h2 .cam-state-dot[data-state="offline"] {
+    background: var(--error);
+  }
+
+  .back-button {
+    background: transparent;
+    color: var(--text);
+    border: none;
+    cursor: pointer;
+    font-size: 1.2rem;
+    padding: 4px 8px 4px 0;
+    line-height: 1;
+    font-family: inherit;
+  }
+  .back-button:hover { color: var(--accent); }
+
+  /* ============================================================
+     Detection toggle (per-cam, lives in card header OR page header)
+     ============================================================ */
+
+  .detection-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: transparent;
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 4px 12px 4px 10px;
+    font-size: 0.78rem;
+    font-family: inherit;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s, color 0.15s;
+    user-select: none;
+  }
+  .detection-toggle:hover:not(:disabled) {
+    border-color: var(--text-muted);
+    color: #fff;
+  }
+  .detection-toggle:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+  .detection-toggle[data-on="true"] {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-dim);
+  }
+  .detection-toggle .toggle-pip {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--text-dim);
+  }
+  .detection-toggle[data-on="true"] .toggle-pip {
+    background: var(--accent);
+    box-shadow: 0 0 6px var(--accent-glow);
+  }
+
+  /* ============================================================
+     Camera card (single, grid tile, detail-main, detail-thumb)
+     ============================================================ */
+
+  .cam-card {
     background: var(--card);
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: 8px;
     overflow: hidden;
+    transition: border-color 0.15s;
   }
-  .camera-frame {
-    aspect-ratio: 4 / 3;
-    background: #000;
+  .cam-card:hover { border-color: var(--card-hover); }
+
+  .cam-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    min-height: 40px;
+  }
+  .cam-card-header .cam-name {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 600;
+    font-size: 0.9rem;
+  }
+  .cam-card-header .cam-name .cam-state-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--text-dim);
+  }
+  .cam-card-header .cam-name .cam-state-dot[data-state="on"] {
+    background: var(--accent);
+    box-shadow: 0 0 5px var(--accent-glow);
+  }
+  .cam-card-header .cam-name .cam-state-dot[data-state="offline"] {
+    background: var(--error);
+  }
+
+  .cam-frame {
+    background: #0a0a0b;
+    aspect-ratio: 16 / 9;
     display: flex;
     align-items: center;
     justify-content: center;
     color: var(--text-muted);
     font-size: 0.85rem;
+    overflow: hidden;
+    position: relative;
   }
-  .camera-frame img {
+  .cam-frame img {
     width: 100%;
     height: 100%;
     object-fit: cover;
     display: block;
   }
-  .camera-bar {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 8px 12px;
-    font-size: 0.78rem;
-    color: var(--text-muted);
-    border-top: 1px solid var(--border);
+  .cam-frame .placeholder {
+    padding: 12px;
+    text-align: center;
   }
-  .camera-bar .camera-name {
-    color: var(--text);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-  }
-  .camera-bar .camera-state-on { color: var(--accent); }
-  .camera-bar .camera-state-off { color: var(--text-muted); }
 
-  /* Events list. */
+  /* Mode-specific overrides. */
+  .cam-card[data-mode="single"] {
+    border: none;
+    background: transparent;
+  }
+  .cam-card[data-mode="single"] .cam-card-header {
+    display: none;       /* the page-header replaces it */
+  }
+  .cam-card[data-mode="single"] .cam-frame {
+    border-radius: 8px;
+    aspect-ratio: 16 / 10;
+    background: #1a1a1d;
+  }
+
+  .cam-card[data-mode="grid"] {
+    cursor: pointer;
+  }
+  .cam-card[data-mode="grid"]:hover { border-color: var(--accent-dim); }
+
+  .cam-card[data-mode="main"] {
+    border: none;
+    background: transparent;
+    flex: 1;
+    min-width: 0;
+  }
+  .cam-card[data-mode="main"] .cam-card-header { display: none; }
+  .cam-card[data-mode="main"] .cam-frame {
+    border-radius: 8px;
+    aspect-ratio: 16 / 10;
+    background: #1a1a1d;
+  }
+
+  .cam-card[data-mode="thumb"] {
+    cursor: pointer;
+    width: 160px;
+    flex-shrink: 0;
+  }
+  .cam-card[data-mode="thumb"] .cam-card-header {
+    padding: 8px 10px;
+    min-height: 0;
+  }
+  .cam-card[data-mode="thumb"] .cam-card-header .cam-name { font-size: 0.78rem; }
+  .cam-card[data-mode="thumb"] .cam-card-header .detection-toggle { display: none; }
+  .cam-card[data-mode="thumb"] .cam-frame { aspect-ratio: 4 / 3; }
+  .cam-card[data-mode="thumb"]:hover { border-color: var(--accent-dim); }
+
+  /* ============================================================
+     Layout containers for the three views
+     ============================================================ */
+
+  .grid-layout {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 14px;
+    margin-bottom: 24px;
+  }
+
+  .detail-layout {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    margin-bottom: 24px;
+  }
+  .detail-layout .detail-rail {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .single-layout {
+    margin-bottom: 24px;
+  }
+
+  /* ============================================================
+     Events list
+     ============================================================ */
+
   .events {
     list-style: none;
     margin: 0;
     padding: 0;
     display: flex;
     flex-direction: column;
-    gap: 8px;
   }
 
   .event {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    overflow: hidden;
-    transition: background 0.15s, border-color 0.15s;
+    border-bottom: 1px solid var(--border);
+    transition: background 0.12s;
   }
   .event:hover { background: var(--card-hover); }
   .event[data-expanded="true"] {
     background: var(--card-hover);
-    border-color: var(--accent-dim);
   }
 
   .event-summary {
-    display: flex;
+    display: grid;
+    grid-template-columns: 24px minmax(120px, 0.9fr) minmax(140px, 2fr) minmax(80px, auto) minmax(80px, auto) 32px;
     align-items: center;
-    gap: 12px;
-    padding: 12px 14px;
+    gap: 14px;
+    padding: 14px 12px;
     cursor: pointer;
     user-select: none;
   }
 
   .event-icon {
-    width: 30px;
-    height: 30px;
+    width: 24px;
+    height: 24px;
     border-radius: 50%;
-    background: var(--accent-dim);
-    color: var(--accent);
     display: flex;
     align-items: center;
     justify-content: center;
-    flex-shrink: 0;
-    font-size: 0.7rem;
+    color: var(--text-dim);
+    font-size: 0.65rem;
   }
   .event[data-expanded="true"] .event-icon {
-    background: var(--accent);
-    color: #000;
+    color: var(--accent);
   }
 
-  .event-meta { flex: 1 1 auto; min-width: 0; }
   .event-title {
+    font-weight: 700;
     font-size: 0.95rem;
-    margin-bottom: 2px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .event-sub {
-    font-size: 0.78rem;
+
+  .event-desc {
     color: var(--text-muted);
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px 10px;
+    font-size: 0.85rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
-  .event-sub span::after {
-    content: " ·";
-    color: var(--border);
-    margin-left: 6px;
-  }
-  .event-sub span:last-child::after { content: ""; }
-  .event-time {
-    font-size: 0.82rem;
+
+  .event-cam {
     color: var(--text-muted);
-    flex-shrink: 0;
+    font-size: 0.85rem;
     text-align: right;
     font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  .event-time {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  .event-play {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text);
+    font-size: 0.75rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    transition: border-color 0.15s, color 0.15s, background 0.15s;
+  }
+  .event-play:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-dim);
   }
 
   .event-player {
     border-top: 1px solid var(--border);
-    padding: 14px;
-    display: none;
+    padding: 14px 12px;
     background: #0a0a0b;
+    display: none;
   }
   .event[data-expanded="true"] .event-player { display: block; }
   .event-player video {
@@ -291,7 +459,7 @@
     background: #000;
     display: block;
   }
-  .event-actions {
+  .event-player-actions {
     margin-top: 10px;
     display: flex;
     align-items: center;
@@ -300,9 +468,9 @@
     font-size: 0.8rem;
     color: var(--text-muted);
   }
-  .event-actions a { color: var(--accent); text-decoration: none; }
-  .event-actions a:hover { text-decoration: underline; }
-  .event-no-clip {
+  .event-player-actions a { color: var(--accent); text-decoration: none; }
+  .event-player-actions a:hover { text-decoration: underline; }
+  .event-player-msg {
     color: var(--text-muted);
     font-size: 0.9rem;
     font-style: italic;
@@ -310,9 +478,13 @@
     padding: 24px 12px;
   }
 
+  /* ============================================================
+     Empty / error states
+     ============================================================ */
+
   .empty {
     text-align: center;
-    padding: 32px 24px;
+    padding: 28px 24px;
     color: var(--text-muted);
     font-size: 0.9rem;
     border: 1px dashed var(--border);
@@ -326,50 +498,51 @@
     font-size: 0.9em;
   }
 
-  .pulse {
-    display: inline-block;
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: var(--accent);
-    margin-right: 6px;
-    vertical-align: middle;
-    animation: pulse 1.6s ease-in-out infinite;
-  }
-  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+  /* ============================================================
+     Responsive
+     ============================================================ */
 
-  @media (max-width: 600px) {
+  @media (max-width: 720px) {
+    main { padding: 16px 14px 32px; }
     header { padding: 10px 14px; }
-    main { padding: 14px; }
-    .event-summary { padding: 10px 12px; gap: 10px; }
-    .event-time { font-size: 0.75rem; }
-    .event-title { font-size: 0.9rem; }
+    .detail-layout { flex-direction: column; }
+    .detail-layout .detail-rail {
+      flex-direction: row;
+      overflow-x: auto;
+      width: 100%;
+    }
+    .cam-card[data-mode="thumb"] { width: 140px; }
+    .event-summary {
+      grid-template-columns: 22px 1fr auto;
+      grid-template-rows: auto auto;
+      gap: 4px 10px;
+    }
+    .event-icon { grid-row: 1 / 3; }
+    .event-title { grid-column: 2 / 3; }
+    .event-desc { grid-column: 2 / 4; grid-row: 2 / 3; font-size: 0.78rem; }
+    .event-cam { display: none; }
+    .event-time { grid-column: 3 / 4; grid-row: 1 / 2; font-size: 0.78rem; }
+    .event-play { grid-column: 3 / 4; grid-row: 1 / 2; display: none; }
   }
 </style>
 </head>
 <body>
 
 <header>
-  <h1>Lux<span class="accent">·</span>Security<span class="accent">·</span>Hub</h1>
+  <h1><span class="brand">Lux Security</span> <span class="section">Camera</span></h1>
   <div class="header-meta">
-    <label class="toggle" id="detection-toggle-label" title="Toggle person detection">
-      <input type="checkbox" id="detection-toggle">
-      <span class="toggle-track"><span class="toggle-thumb"></span></span>
-      <span class="toggle-label">Detection</span>
-    </label>
-    <span id="status"><span class="pulse"></span>loading…</span>
-    <button id="refresh" title="Refresh now">Refresh</button>
+    <span class="system-status" id="system-status" data-state="loading">
+      <span>System</span>
+      <span class="system-dot"></span>
+    </span>
   </div>
 </header>
 
 <main>
   <div id="banner"></div>
-  <div class="section-label">Cameras</div>
+  <div id="page-header" class="page-header"></div>
   <div id="cameras"></div>
-  <div class="section-label">Events</div>
-  <div id="events">
-    <div class="empty">Loading events…</div>
-  </div>
+  <div id="events"></div>
 </main>
 
 <script>
@@ -377,22 +550,70 @@
     "use strict";
 
     const REFRESH_MS = 15_000;
-    const LIMIT = 100;
+    const EVENT_LIMIT = 100;
+
+    // ============================================================
+    //  DOM handles
+    // ============================================================
 
     const banner = document.getElementById("banner");
+    const pageHeader = document.getElementById("page-header");
     const camerasEl = document.getElementById("cameras");
     const eventsEl = document.getElementById("events");
-    const status = document.getElementById("status");
-    const refreshBtn = document.getElementById("refresh");
-    const toggleInput = document.getElementById("detection-toggle");
-    const toggleLabel = document.getElementById("detection-toggle-label");
+    const systemStatus = document.getElementById("system-status");
+
+    // ============================================================
+    //  In-memory state
+    // ============================================================
 
     let refreshTimer = null;
-    let camerasRendered = false;
-    let detectionPending = false;
-    let lastDetectionState = null;
+    let lastCams = [];                    // last-fetched /cams response
+    let lastEvents = [];                  // last-fetched events (already merged + sorted)
+    let detectionAvailable = true;        // hub-wide capability; false when worker isn't running
 
-    async function fetchJson(url, init) {
+    // Cached DOM nodes per cam_id so MJPEG <img> connections survive view
+    // changes. Keyed by cam_id; value is a `.cam-card` element. We re-parent
+    // these into whichever layout container we render, never re-create.
+    const camCardCache = new Map();
+
+    // Track which event row is expanded so re-renders preserve it.
+    let expandedEventId = null;
+
+    // ============================================================
+    //  Routing — view = single | grid | detail
+    // ============================================================
+
+    function currentView () {
+        if (lastCams.length === 0) return { kind: "empty" };
+        if (lastCams.length === 1) return { kind: "single", camId: lastCams[0].cam_id };
+        const m = (window.location.hash || "").match(/^#\/cam\/(.+)$/);
+        if (m) {
+            const camId = decodeURIComponent(m[1]);
+            if (lastCams.some((c) => c.cam_id === camId)) {
+                return { kind: "detail", camId };
+            }
+            // Stale hash (cam disconnected, etc.) — fall back to grid.
+        }
+        return { kind: "grid" };
+    }
+
+    function navigateTo (camId) {
+        // Use hash routing so back-button works and deep links are bookmarkable.
+        window.location.hash = "#/cam/" + encodeURIComponent(camId);
+    }
+    function navigateBack () {
+        // Push a clean URL without the hash so browser back/forward stays tidy.
+        history.pushState("", document.title, window.location.pathname + window.location.search);
+        rerender();
+    }
+
+    window.addEventListener("hashchange", () => rerender());
+
+    // ============================================================
+    //  Fetch helpers
+    // ============================================================
+
+    async function fetchJson (url, init) {
         const res = await fetch(url, Object.assign({ cache: "no-store" }, init || {}));
         const text = await res.text();
         let body;
@@ -406,224 +627,368 @@
         return body;
     }
 
-    async function load(initial) {
+    // ============================================================
+    //  Main poll loop
+    // ============================================================
+
+    async function load () {
         try {
-            // 1. Detection state — drives the toggle + banner.
+            // Detection capability — drives the per-cam toggle's enabled-ness
+            // and the optional banner.
             try {
                 const detection = await fetchJson("/detection");
-                applyDetectionState(detection);
+                applyDetection(detection);
             } catch (err) {
-                applyDetectionState({ enabled: false, available: false, error: err.message });
+                applyDetection({ enabled: false, available: false, error: err.message });
             }
 
-            // 2. Camera list — render thumbnails ONCE so MJPEG streams aren't
-            //    torn down on every auto-refresh.
             const cams = await fetchJson("/cams");
-            if (!camerasRendered) {
-                renderCameras(cams);
-                camerasRendered = true;
-            } else {
-                updateCameraStates(cams);
-            }
+            lastCams = cams || [];
 
-            // 3. Events. Even if detection is currently off, the store may
-            //    still have past rows worth showing.
+            // Events. In detail view we filter to that cam server-side. Grid +
+            // single show all, merged.
+            const view = currentView();
             const allEvents = [];
             let storeUnavailable = false;
-            for (const cam of cams) {
+            const camIds = view.kind === "detail" ? [view.camId] : lastCams.map((c) => c.cam_id);
+            for (const id of camIds) {
                 try {
-                    const events = await fetchJson("/cam/" + encodeURIComponent(cam.cam_id) + "/events?limit=" + LIMIT);
+                    const events = await fetchJson("/cam/" + encodeURIComponent(id) + "/events?limit=" + EVENT_LIMIT);
                     for (const e of events) allEvents.push(e);
                 } catch (err) {
                     if (err.status === 503) { storeUnavailable = true; break; }
                     throw err;
                 }
             }
-            if (storeUnavailable) {
-                renderEventsEmpty('Event store unavailable. Enable detection above to start capturing events.');
-            } else {
-                allEvents.sort((a, b) => b.started_at_ms - a.started_at_ms);
-                renderEvents(allEvents);
-            }
-            setStatus("updated " + new Date().toLocaleTimeString());
+            allEvents.sort((a, b) => b.started_at_ms - a.started_at_ms);
+            lastEvents = storeUnavailable ? null : allEvents;
+
+            setSystemStatus("ok");
+            rerender();
         } catch (err) {
-            setStatus("error");
-            renderEventsEmpty('<span style="color:var(--error)">Error loading events: ' + escapeHtml(err.message) + '</span>');
+            setSystemStatus("error");
+            renderError(err.message || String(err));
         }
         schedule();
     }
 
-    function schedule() {
+    function schedule () {
         if (refreshTimer) clearTimeout(refreshTimer);
-        // Don't refresh while a video is playing; the events list re-render
-        // would tear the player down.
+        // Don't refresh while a clip is playing — re-render would tear down
+        // the <video> element.
         const playing = document.querySelector(".event[data-expanded='true'] video");
         const isPlaying = playing && !playing.paused && !playing.ended;
         refreshTimer = setTimeout(isPlaying ? schedule : load, REFRESH_MS);
     }
 
-    function setStatus(text) {
-        status.innerHTML = "";
-        status.textContent = text;
+    function setSystemStatus (state) {
+        systemStatus.dataset.state = state;
     }
 
-    /* ---- Detection toggle ---- */
+    // ============================================================
+    //  Top-level render dispatch
+    // ============================================================
 
-    function applyDetectionState(state) {
-        lastDetectionState = state;
-        toggleInput.checked = !!state.enabled;
-        toggleLabel.classList.toggle("is-error", !!state.error);
-        toggleLabel.classList.toggle("is-pending", detectionPending);
+    function rerender () {
+        const view = currentView();
 
-        banner.innerHTML = "";
+        if (view.kind === "empty") {
+            renderHeaderEmpty();
+            camerasEl.replaceChildren(emptyEl(
+                "No cameras have ever connected to this hub.<br>" +
+                "Set up a camera_node — see <code>camera_node/README.md</code>."
+            ));
+            renderEvents([]);
+            return;
+        }
+
+        if (view.kind === "single") {
+            renderSingle(view.camId);
+        } else if (view.kind === "detail") {
+            renderDetail(view.camId);
+        } else {
+            renderGrid();
+        }
+        renderEvents(lastEvents);
+    }
+
+    function renderError (msg) {
+        camerasEl.replaceChildren();
+        eventsEl.replaceChildren(emptyEl(
+            '<span style="color: var(--error)">Error loading: ' + escapeHtml(msg) + "</span>"
+        ));
+    }
+
+    // ============================================================
+    //  Per-view renderers
+    // ============================================================
+
+    function renderHeaderEmpty () {
+        pageHeader.replaceChildren();
+    }
+
+    function renderSingle (camId) {
+        const cam = lastCams.find((c) => c.cam_id === camId);
+        if (!cam) return;
+        renderPageHeader({ cam, showBack: false });
+
+        const layout = document.createElement("div");
+        layout.className = "single-layout";
+        const card = ensureCamCard(cam, "single");
+        layout.appendChild(card);
+        camerasEl.replaceChildren(layout);
+    }
+
+    function renderGrid () {
+        // No per-cam title at the top in grid view — the header section
+        // already says "Camera". The mockup's back arrow on the all-cams
+        // view appears to be an artifact; we omit it.
+        pageHeader.replaceChildren();
+
+        const grid = document.createElement("div");
+        grid.className = "grid-layout";
+        for (const cam of lastCams) {
+            const card = ensureCamCard(cam, "grid");
+            card.onclick = () => navigateTo(cam.cam_id);
+            grid.appendChild(card);
+        }
+        camerasEl.replaceChildren(grid);
+    }
+
+    function renderDetail (selectedCamId) {
+        const selected = lastCams.find((c) => c.cam_id === selectedCamId);
+        if (!selected) return;
+        renderPageHeader({ cam: selected, showBack: true });
+
+        const layout = document.createElement("div");
+        layout.className = "detail-layout";
+
+        // Side rail: every other camera as a clickable thumb.
+        const rail = document.createElement("div");
+        rail.className = "detail-rail";
+        for (const cam of lastCams) {
+            if (cam.cam_id === selectedCamId) continue;
+            const thumb = ensureCamCard(cam, "thumb");
+            thumb.onclick = () => navigateTo(cam.cam_id);
+            rail.appendChild(thumb);
+        }
+        if (rail.children.length > 0) layout.appendChild(rail);
+
+        // Main: the selected camera at full width.
+        const main = ensureCamCard(selected, "main");
+        main.onclick = null;
+        layout.appendChild(main);
+
+        camerasEl.replaceChildren(layout);
+    }
+
+    function renderPageHeader ({ cam, showBack }) {
+        pageHeader.replaceChildren();
+        const left = document.createElement("div");
+        left.className = "page-header-left";
+        if (showBack) {
+            const back = document.createElement("button");
+            back.className = "back-button";
+            back.title = "Back to all cameras";
+            back.textContent = "←";
+            back.onclick = navigateBack;
+            left.appendChild(back);
+        }
+        const title = document.createElement("h2");
+        title.appendChild(text(cam.cam_id));
+        const dot = document.createElement("span");
+        dot.className = "cam-state-dot";
+        dot.dataset.state = camDotState(cam);
+        title.appendChild(dot);
+        left.appendChild(title);
+
+        const right = document.createElement("div");
+        right.appendChild(makeDetectionToggle(cam));
+
+        pageHeader.appendChild(left);
+        pageHeader.appendChild(right);
+    }
+
+    // ============================================================
+    //  Camera card (the <img> survives across view changes)
+    // ============================================================
+
+    function ensureCamCard (cam, mode) {
+        let card = camCardCache.get(cam.cam_id);
+        if (!card) {
+            card = buildCamCard(cam);
+            camCardCache.set(cam.cam_id, card);
+        }
+        card.dataset.mode = mode;
+        // Header bits (name dot, detection toggle state) update on every
+        // poll. The <img> stays untouched unless the cam went off/offline,
+        // which we handle in updateCamCardFrame.
+        updateCamCardHeader(card, cam);
+        updateCamCardFrame(card, cam);
+        return card;
+    }
+
+    function buildCamCard (cam) {
+        const card = document.createElement("div");
+        card.className = "cam-card";
+        card.dataset.camId = cam.cam_id;
+
+        const header = document.createElement("div");
+        header.className = "cam-card-header";
+
+        const name = document.createElement("span");
+        name.className = "cam-name";
+        name.appendChild(text(cam.cam_id));
+        const dot = document.createElement("span");
+        dot.className = "cam-state-dot";
+        name.appendChild(dot);
+        header.appendChild(name);
+        header.appendChild(makeDetectionToggle(cam));
+
+        const frame = document.createElement("div");
+        frame.className = "cam-frame";
+
+        card.appendChild(header);
+        card.appendChild(frame);
+        return card;
+    }
+
+    function updateCamCardHeader (card, cam) {
+        const dot = card.querySelector(".cam-card-header .cam-state-dot");
+        if (dot) dot.dataset.state = camDotState(cam);
+        // Re-render the toggle so its state reflects the latest poll.
+        const headerEl = card.querySelector(".cam-card-header");
+        const oldToggle = headerEl.querySelector(".detection-toggle");
+        const newToggle = makeDetectionToggle(cam);
+        oldToggle.replaceWith(newToggle);
+    }
+
+    function updateCamCardFrame (card, cam) {
+        const frame = card.querySelector(".cam-frame");
+        const wantImg = !!(cam.connected && cam.state === "on");
+        const existingImg = frame.querySelector("img");
+        if (wantImg && !existingImg) {
+            // First render or transitioning offline → online: build the <img>.
+            const img = document.createElement("img");
+            img.alt = cam.cam_id + " live feed";
+            img.src = "/cam/" + encodeURIComponent(cam.cam_id) + "/stream.mjpg?t=" + Date.now();
+            frame.replaceChildren(img);
+        } else if (!wantImg && existingImg) {
+            // Online → offline: explicitly null the src to release the
+            // browser's connection slot, then swap to a placeholder.
+            try { existingImg.src = ""; } catch (_) { /* ignore */ }
+            const ph = document.createElement("div");
+            ph.className = "placeholder";
+            ph.textContent = !cam.connected ? "camera offline" : "camera off";
+            frame.replaceChildren(ph);
+        } else if (!wantImg && !existingImg) {
+            // Already showing a placeholder; just refresh its text.
+            const ph = frame.querySelector(".placeholder");
+            if (ph) ph.textContent = !cam.connected ? "camera offline" : "camera off";
+            else {
+                const fresh = document.createElement("div");
+                fresh.className = "placeholder";
+                fresh.textContent = !cam.connected ? "camera offline" : "camera off";
+                frame.replaceChildren(fresh);
+            }
+        }
+        // wantImg && existingImg → leave it alone; the MJPEG keeps streaming.
+    }
+
+    function camDotState (cam) {
+        if (!cam.connected) return "offline";
+        if (cam.state === "on") return "on";
+        return "off";
+    }
+
+    // ============================================================
+    //  Detection toggle (per-cam)
+    // ============================================================
+
+    function makeDetectionToggle (cam) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "detection-toggle";
+        const enabled = cam.detection_enabled !== false;
+        btn.dataset.on = enabled ? "true" : "false";
+
+        const pip = document.createElement("span");
+        pip.className = "toggle-pip";
+        const label = document.createElement("span");
+        label.textContent = "Detection";
+        btn.appendChild(pip);
+        btn.appendChild(label);
+
+        if (!detectionAvailable) {
+            btn.disabled = true;
+            btn.title = "Detection isn't running on the hub";
+        }
+
+        btn.addEventListener("click", async (ev) => {
+            ev.stopPropagation();      // don't trigger the card's "navigate to detail" handler
+            if (btn.disabled) return;
+            const want = btn.dataset.on !== "true";
+            // Optimistic flip.
+            btn.dataset.on = want ? "true" : "false";
+            btn.disabled = true;
+            try {
+                await fetchJson("/cam/" + encodeURIComponent(cam.cam_id) + "/detection", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ enabled: want })
+                });
+                cam.detection_enabled = want;
+            } catch (err) {
+                // Revert on failure.
+                btn.dataset.on = !want ? "true" : "false";
+                console.warn("detection toggle failed:", err);
+            } finally {
+                btn.disabled = !detectionAvailable ? true : false;
+            }
+        });
+        return btn;
+    }
+
+    function applyDetection (state) {
+        detectionAvailable = !!state.available;
+        banner.replaceChildren();
         if (state.error) {
             const div = document.createElement("div");
             div.className = "banner";
             div.innerHTML =
-                '<div class="banner-title">Detection couldn\'t start</div>' +
+                '<div class="banner-title">Detection isn\'t running on this hub</div>' +
                 '<div>' + escapeHtml(state.error) + '</div>' +
-                '<div style="margin-top:6px;color:var(--text-muted);font-size:0.85em;">' +
-                'Most common cause: <code>better-sqlite3</code> wasn\'t built against the Node version MagicMirror runs under. ' +
-                'Re-run <code>./mm_module/install.sh</code> on the hub Pi using the same Node that starts MagicMirror, then restart MagicMirror.' +
+                '<div style="margin-top: 6px; color: var(--text-muted); font-size: 0.85em;">' +
+                'Most common cause: <code>better-sqlite3</code> wasn\'t built against the Node ' +
+                'version the hub runs under. Re-run <code>./hub/install.sh</code> using the ' +
+                'same Node, then restart the hub.' +
                 '</div>';
             banner.appendChild(div);
         }
     }
 
-    toggleInput.addEventListener("change", async (ev) => {
-        if (detectionPending) return;
-        const wantEnabled = ev.target.checked;
-        detectionPending = true;
-        toggleLabel.classList.add("is-pending");
-        toggleInput.disabled = true;
-        try {
-            const newState = await fetchJson("/detection", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ enabled: wantEnabled })
-            });
-            applyDetectionState(newState);
-        } catch (err) {
-            // Server returned non-2xx; the body still contains the new state.
-            applyDetectionState(err.body || { enabled: false, error: err.message });
-        } finally {
-            detectionPending = false;
-            toggleInput.disabled = false;
-            toggleLabel.classList.remove("is-pending");
-            // Detection toggling can change which events the store has;
-            // refresh now to show that.
-            if (refreshTimer) clearTimeout(refreshTimer);
-            load();
-        }
-    });
+    // ============================================================
+    //  Events
+    // ============================================================
 
-    /* ---- Cameras ---- */
-
-    function renderCameras(cams) {
-        camerasEl.replaceChildren();
-        if (!cams || cams.length === 0) {
-            const empty = document.createElement("div");
-            empty.className = "empty";
-            empty.textContent = "No cameras have ever connected to the hub.";
-            camerasEl.appendChild(empty);
+    function renderEvents (events) {
+        if (events === null) {
+            eventsEl.replaceChildren(emptyEl(
+                "Event store unavailable. Detection has never been enabled on this hub."
+            ));
             return;
         }
-        const grid = document.createElement("div");
-        grid.className = "cameras";
-        for (const cam of cams) grid.appendChild(renderCamera(cam));
-        camerasEl.appendChild(grid);
-    }
-
-    function renderCamera(cam) {
-        const card = document.createElement("div");
-        card.className = "camera";
-        card.dataset.camId = cam.cam_id;
-
-        const frame = document.createElement("div");
-        frame.className = "camera-frame";
-        renderCameraFrame(frame, cam);
-        card.appendChild(frame);
-
-        const bar = document.createElement("div");
-        bar.className = "camera-bar";
-        const name = document.createElement("span");
-        name.className = "camera-name";
-        name.textContent = cam.cam_id;
-        bar.appendChild(name);
-        const state = document.createElement("span");
-        state.className = "camera-state " + (cam.state === "on" ? "camera-state-on" : "camera-state-off");
-        state.textContent = describeCamState(cam);
-        bar.appendChild(state);
-        card.appendChild(bar);
-
-        return card;
-    }
-
-    function renderCameraFrame(frame, cam) {
-        frame.replaceChildren();
-        if (cam.connected && cam.state === "on") {
-            const img = document.createElement("img");
-            img.alt = cam.cam_id + " live feed";
-            // Cache-bust on initial load only — afterwards the MJPEG stream
-            // keeps the connection alive on its own.
-            img.src = "/cam/" + encodeURIComponent(cam.cam_id) + "/stream.mjpg?t=" + Date.now();
-            frame.appendChild(img);
-        } else {
-            const placeholder = document.createElement("div");
-            if (!cam.connected) {
-                placeholder.textContent = "camera offline";
-            } else {
-                placeholder.textContent = "camera off";
-            }
-            frame.appendChild(placeholder);
-        }
-    }
-
-    function updateCameraStates(cams) {
-        for (const cam of cams) {
-            const card = camerasEl.querySelector('.camera[data-cam-id="' + cssEscape(cam.cam_id) + '"]');
-            if (!card) continue;
-            const bar = card.querySelector(".camera-bar .camera-state");
-            if (bar) {
-                bar.className = "camera-state " + (cam.state === "on" ? "camera-state-on" : "camera-state-off");
-                bar.textContent = describeCamState(cam);
-            }
-            // If the cam transitioned off → on (or offline → connected), we
-            // need a fresh <img> to reopen the MJPEG. Detect by checking
-            // whether the frame currently has an <img>.
-            const frame = card.querySelector(".camera-frame");
-            const hasImg = frame && frame.querySelector("img");
-            const wantImg = cam.connected && cam.state === "on";
-            if (frame && (!hasImg && wantImg || hasImg && !wantImg)) {
-                renderCameraFrame(frame, cam);
-            }
-        }
-    }
-
-    function describeCamState(cam) {
-        if (!cam.connected) return "offline";
-        if (cam.state === "on") return "live";
-        return "off";
-    }
-
-    function cssEscape(s) {
-        // Minimal escape for use inside a [data-cam-id="..."] selector.
-        return String(s).replace(/(["\\])/g, "\\$1");
-    }
-
-    /* ---- Events ---- */
-
-    function renderEvents(events) {
-        if (events.length === 0) {
-            renderEventsEmpty('No events captured yet. Walk past the camera to trigger one.');
+        if (!events || events.length === 0) {
+            eventsEl.replaceChildren(emptyEl(
+                "No events yet. Walk past a camera with detection enabled to trigger one."
+            ));
             return;
         }
-        const expandedId = currentlyExpandedId();
         const ul = document.createElement("ul");
         ul.className = "events";
         for (const e of events) {
             const li = renderEvent(e);
-            if (e.id === expandedId) {
+            if (e.id === expandedEventId) {
                 li.dataset.expanded = "true";
                 renderPlayer(li.querySelector(".event-player"), e);
             }
@@ -632,14 +997,7 @@
         eventsEl.replaceChildren(ul);
     }
 
-    function renderEventsEmpty(html) {
-        const div = document.createElement("div");
-        div.className = "empty";
-        div.innerHTML = html;
-        eventsEl.replaceChildren(div);
-    }
-
-    function renderEvent(e) {
+    function renderEvent (e) {
         const li = document.createElement("li");
         li.className = "event";
         li.dataset.expanded = "false";
@@ -650,33 +1008,39 @@
 
         const icon = document.createElement("div");
         icon.className = "event-icon";
-        icon.textContent = "▶";
+        icon.textContent = "●";
         summary.appendChild(icon);
-
-        const meta = document.createElement("div");
-        meta.className = "event-meta";
 
         const title = document.createElement("div");
         title.className = "event-title";
         title.textContent = capitalize(e.type || "event") + " detected";
-        meta.appendChild(title);
+        summary.appendChild(title);
 
-        const sub = document.createElement("div");
-        sub.className = "event-sub";
-        sub.appendChild(makeSpan(e.cam_id));
-        if (e.duration_ms) sub.appendChild(makeSpan(formatDuration(e.duration_ms)));
-        if (e.detection_count) sub.appendChild(makeSpan(e.detection_count + " detections"));
-        if (typeof e.max_confidence === "number") {
-            sub.appendChild(makeSpan(Math.round(e.max_confidence * 100) + "% confidence"));
-        }
-        if (!e.clip_path) sub.appendChild(makeSpan("no clip"));
-        meta.appendChild(sub);
-        summary.appendChild(meta);
+        const desc = document.createElement("div");
+        desc.className = "event-desc";
+        desc.textContent = formatDescription(e);
+        summary.appendChild(desc);
+
+        const cam = document.createElement("div");
+        cam.className = "event-cam";
+        cam.textContent = e.cam_id;
+        summary.appendChild(cam);
 
         const time = document.createElement("div");
         time.className = "event-time";
         time.textContent = formatTime(e.started_at_ms);
         summary.appendChild(time);
+
+        const play = document.createElement("button");
+        play.className = "event-play";
+        play.type = "button";
+        play.title = "Play clip";
+        play.textContent = "▶";
+        play.addEventListener("click", (ev) => {
+            ev.stopPropagation();
+            toggleEvent(li, e);
+        });
+        summary.appendChild(play);
 
         const player = document.createElement("div");
         player.className = "event-player";
@@ -684,11 +1048,11 @@
         li.appendChild(summary);
         li.appendChild(player);
 
-        summary.addEventListener("click", () => toggle(li, e));
+        summary.addEventListener("click", () => toggleEvent(li, e));
         return li;
     }
 
-    function toggle(li, e) {
+    function toggleEvent (li, e) {
         const wasOpen = li.dataset.expanded === "true";
         document.querySelectorAll('.event[data-expanded="true"]').forEach((other) => {
             if (other === li) return;
@@ -698,18 +1062,22 @@
         if (wasOpen) {
             li.dataset.expanded = "false";
             li.querySelector(".event-player").replaceChildren();
+            expandedEventId = null;
         } else {
             li.dataset.expanded = "true";
             renderPlayer(li.querySelector(".event-player"), e);
+            expandedEventId = e.id;
             li.scrollIntoView({ behavior: "smooth", block: "nearest" });
         }
     }
 
-    function renderPlayer(container, e) {
+    function renderPlayer (container, e) {
         container.replaceChildren();
         if (!e.clip_path) {
-            container.appendChild(textDiv("event-no-clip",
-                "No clip recorded for this event (was ffmpeg available when it was captured?)."));
+            const msg = document.createElement("div");
+            msg.className = "event-player-msg";
+            msg.textContent = "No clip recorded for this event (was ffmpeg available when it was captured?).";
+            container.appendChild(msg);
             return;
         }
         const ext = (e.clip_path.match(/\.(mkv|mp4)$/i) || [".mkv"])[0];
@@ -721,80 +1089,93 @@
         video.playsInline = true;
         video.src = url;
         video.addEventListener("error", () => {
-            const note = textDiv("event-no-clip",
+            const note = document.createElement("div");
+            note.className = "event-player-msg";
+            note.textContent =
                 "Your browser couldn't decode this clip (MKV/MJPEG isn't universal). " +
-                "Use the download link below, or switch the hub's recording.codec to \"h264\" for broader compatibility.");
+                "Use the download link below, or switch the hub's recording.codec to \"h264\" for broader compatibility.";
             container.appendChild(note);
         });
         container.appendChild(video);
 
         const actions = document.createElement("div");
-        actions.className = "event-actions";
-
+        actions.className = "event-player-actions";
         const dl = document.createElement("a");
         dl.href = url;
         dl.download = e.clip_path.split("/").pop();
         dl.textContent = "Download";
         actions.appendChild(dl);
-
-        const pathSpan = document.createElement("span");
-        pathSpan.textContent = e.clip_path;
-        actions.appendChild(pathSpan);
-
+        const path = document.createElement("span");
+        path.textContent = e.clip_path;
+        actions.appendChild(path);
         container.appendChild(actions);
+
         video.play().catch(() => { /* autoplay may be blocked; controls still work */ });
     }
 
-    function currentlyExpandedId() {
-        const el = document.querySelector('.event[data-expanded="true"]');
-        return el ? Number(el.dataset.eventId) : null;
+    // ============================================================
+    //  Formatters
+    // ============================================================
+
+    function formatDescription (e) {
+        const parts = [];
+        if (e.duration_ms != null) parts.push(formatDuration(e.duration_ms));
+        if (typeof e.max_confidence === "number") {
+            parts.push(Math.round(e.max_confidence * 100) + "% max confidence");
+        }
+        if (typeof e.detection_count === "number" && e.detection_count > 1) {
+            parts.push(e.detection_count + " detections");
+        }
+        if (!e.clip_path) parts.push("no clip");
+        return parts.join(" · ") || "—";
     }
 
-    /* ---- helpers ---- */
-
-    function makeSpan(text) {
-        const s = document.createElement("span");
-        s.textContent = text;
-        return s;
-    }
-    function textDiv(cls, text) {
-        const d = document.createElement("div");
-        d.className = cls;
-        d.textContent = text;
-        return d;
-    }
-    function formatTime(ms) {
+    function formatTime (ms) {
         const d = new Date(ms);
         const today = new Date();
         const sameDay = d.toDateString() === today.toDateString();
-        const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-        if (sameDay) return time;
-        const date = d.toLocaleDateString([], { month: "short", day: "numeric" });
-        return date + " " + time;
+        const t = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+        if (sameDay) return t;
+        return d.toLocaleDateString([], { month: "short", day: "numeric" }) + " " + t;
     }
-    function formatDuration(ms) {
+
+    function formatDuration (ms) {
         if (ms < 1000) return ms + " ms";
         const s = ms / 1000;
         if (s < 60) return s.toFixed(1) + "s";
         const m = Math.floor(s / 60);
         return m + "m " + Math.round(s - m * 60) + "s";
     }
-    function capitalize(s) {
+
+    function capitalize (s) {
         if (!s) return "";
         return s.charAt(0).toUpperCase() + s.slice(1);
     }
-    function escapeHtml(s) {
+
+    function escapeHtml (s) {
         return String(s).replace(/[&<>"']/g, (c) =>
             ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
     }
 
-    refreshBtn.addEventListener("click", () => {
-        if (refreshTimer) clearTimeout(refreshTimer);
-        setStatus("refreshing…");
-        load();
-    });
+    function emptyEl (html) {
+        const el = document.createElement("div");
+        el.className = "empty";
+        el.innerHTML = html;
+        return el;
+    }
 
-    load(true);
+    function text (s) { return document.createTextNode(s); }
+
+    // ============================================================
+    //  Boot
+    // ============================================================
+
+    load();
+
+    // Future TODO: at >6 cameras the browser's per-origin connection cap
+    // will start dropping thumb streams. Add a `/cam/<id>/snapshot.jpg`
+    // endpoint and a poll loop so thumbs become single-frame snapshots
+    // rather than continuous MJPEG streams.
 })();
 </script>
 </body>

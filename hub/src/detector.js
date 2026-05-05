@@ -212,9 +212,10 @@ class Detector {
         const { cam } = entry;
         const stale = Date.now() - (cam.lastJpegAt || 0) > STALE_FRAME_MS;
         const off = cam.desiredState !== "on";
+        const muted = cam.detectionEnabled === false;     // per-cam runtime mute
         const sameFrame = cam.frameSeq === entry.lastInferSeq;
 
-        if (off || stale || !cam.lastJpeg || sameFrame || entry.pending) {
+        if (off || muted || stale || !cam.lastJpeg || sameFrame || entry.pending) {
             this._scheduleNextTick(camId);
             return;
         }
