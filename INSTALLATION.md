@@ -235,7 +235,15 @@ To run it as a service without `install.sh`, write your own systemd unit modelle
 
 ## 7. Install the hub
 
-Pick whichever box will be the hub — typically the same Pi that runs MagicMirror, but any Linux host with **Node.js 18+** works (a spare Pi 4/5, a NUC, a desktop). On that box:
+Pick whichever box will be the hub. Anything with **Node.js 18+**:
+
+- A spare Raspberry Pi 4 (8 GB) or Pi 5 (recommended for detection)
+- The same Pi that runs MagicMirror (alongside MM as a separate service)
+- A Linux desktop / NUC / mini-PC
+- **A Mac** (Apple Silicon or Intel), installed as a launchd LaunchAgent
+- **A Windows PC**, manual install — see [`hub/README.md`](hub/README.md#install--windows)
+
+On Linux or macOS:
 
 ```bash
 git clone git@github.com:JaredLodwick/DoorCamera.git ~/LuxSecurityCamera
@@ -243,20 +251,27 @@ cd ~/LuxSecurityCamera
 ./hub/install.sh
 ```
 
-The installer:
+The installer detects the OS and takes the right path:
 
-- Verifies Node.js >= 18, npm, and systemd are present (warns if `ffmpeg` is missing — recording silently skips, detection still runs).
-- Runs `npm install --omit=dev` inside `hub/` (pulls `onnxruntime-node`, `sharp`, `better-sqlite3`, `ws`, `js-yaml`).
-- Bootstraps `/etc/lux-security-hub/config.yml` from `config.example.yml` — left untouched on re-runs.
-- Generates `/etc/systemd/system/lux-security-hub.service`, enables it, starts it, and verifies.
+| Step | Linux (systemd) | macOS (launchd) |
+|---|---|---|
+| Pre-flight | Verifies Node 18+, npm, systemd. Warns on missing `ffmpeg`. | Verifies Node 18+, npm. Warns on missing `ffmpeg` (`brew install ffmpeg`). |
+| Existing-hub probe | See [Re-installing / migrating the hub](#re-installing--migrating-the-hub) below. | Same. |
+| Deps | `npm install --omit=dev` inside `hub/`. | Same. |
+| Config | Bootstraps `/etc/lux-security-hub/config.yml` (sudo). | Bootstraps `~/.config/luxsecurityhub/config.yml` (no sudo). |
+| Service | `/etc/systemd/system/lux-security-hub.service`, `systemctl enable + restart`. | `~/Library/LaunchAgents/com.luxsecurityhub.plist`, `launchctl load -w`. |
+| Verify | `systemctl is-active --quiet`. | `launchctl list com.luxsecurityhub`. |
 
 When it finishes you should see:
 
 ```
-[OK] lux-security-hub.service is running.
+[OK] lux-security-hub.service is running.       # Linux
+[OK] com.luxsecurityhub is running (pid …)      # macOS
 ```
 
-The hub now listens on **port 5000** (configurable). The dashboard is at `http://<hub-host>:5000/`. Camera nodes connect to `ws://<hub-host>:5000/cam/<cam_id>`.
+The hub listens on **port 5000** (configurable). The dashboard is at `http://<hub-host>:5000/`. Camera nodes connect to `ws://<hub-host>:5000/cam/<cam_id>`.
+
+> **macOS gotcha — port 5000.** macOS ships an AirPlay Receiver on port 5000. If the hub log shows `EADDRINUSE: address already in use 0.0.0.0:5000`, either disable AirPlay Receiver (System Settings → General → AirDrop & Handoff) or change `hub.port` in `~/.config/luxsecurityhub/config.yml` and reload the agent.
 
 ### Detection (optional, off by default)
 
@@ -264,9 +279,12 @@ Detection is disabled out of the box so a fresh install doesn't burn CPU before 
 
 ```bash
 # Persistent (survives restart): edit the YAML
-sudoedit /etc/lux-security-hub/config.yml
-# set detection.enabled: true, then:
-sudo systemctl restart lux-security-hub
+sudoedit /etc/lux-security-hub/config.yml             # Linux
+${EDITOR:-vi} ~/.config/luxsecurityhub/config.yml     # macOS
+# set detection.enabled: true, then restart:
+sudo systemctl restart lux-security-hub               # Linux
+launchctl unload ~/Library/LaunchAgents/com.luxsecurityhub.plist && \
+  launchctl load -w ~/Library/LaunchAgents/com.luxsecurityhub.plist     # macOS
 
 # Or runtime-only (cleared on next restart):
 curl -X POST -H 'Content-Type: application/json' \
@@ -275,7 +293,50 @@ curl -X POST -H 'Content-Type: application/json' \
 
 The hub's dashboard at `http://<hub-host>:5000/` has a Detection toggle in the header that does the same thing.
 
-If detection fails to start (e.g. `better-sqlite3` was built against a different Node version than the one MagicMirror or the hub uses) the dashboard surfaces the actual error — fix and re-run `./hub/install.sh`.
+If detection fails to start (e.g. `better-sqlite3` was built against a different Node version than the one the hub runs under) the dashboard surfaces the actual error — fix and re-run `./hub/install.sh`.
+
+### Re-installing / migrating the hub
+
+The hub installer is **idempotent and detection-aware**: before touching anything on disk, it probes the local machine for an existing hub and asks whether you have one running on another machine on your network.
+
+**Re-installing on the same machine** is the right move for almost any hub problem you might have. The installer:
+
+- Reads `hub.port` from your existing config and probes `http://localhost:<port>` for `/healthz` + `/cams`. If found, surfaces a "this looks like a re-install" message.
+- Rewrites the systemd unit / LaunchAgent and restarts the service.
+- **Preserves** `/etc/lux-security-hub/config.yml` / `~/.config/luxsecurityhub/config.yml` — your customizations survive.
+- **Preserves** the events database and recorded clips.
+
+If the hub is misbehaving, check logs first:
+
+```bash
+journalctl -fu lux-security-hub                       # Linux
+tail -f ~/Library/Logs/LuxSecurityHub.err.log         # macOS
+```
+
+Then `git pull && ./hub/install.sh` should fix most config-related problems.
+
+**Standing up a hub on a new machine** (because you're moving hardware, or recovering from a host that's truly dead) — the installer asks before letting you do this:
+
+1. When asked "Do you already have a hub running on another machine on your network?" answer `y` and provide the URL.
+2. The installer probes that URL. If it confirms the old hub is alive, it shows a structured menu for migrating, recovering, or running both — pick the relevant scenario.
+3. After this hub finishes installing, **update each camera_node's config** to point at the new host:
+   ```bash
+   ssh user@camera-pi 'sudoedit /etc/camera-node/config.yml'
+   # change `hub.url` to ws://<new-host>:5000, then:
+   ssh user@camera-pi 'sudo systemctl restart camera-node'
+   ```
+4. **Update your MagicMirror module config** if you use one — change `hubUrl` in `~/MagicMirror/config/config.js`, restart MM, hard-refresh the browser.
+5. **Stop the old hub** so it stops orphaning resources:
+   ```bash
+   ssh user@old-host 'sudo systemctl disable --now lux-security-hub'              # Linux
+   ssh user@old-host 'launchctl unload ~/Library/LaunchAgents/com.luxsecurityhub.plist'   # macOS
+   ```
+
+To bypass all the pre-flight prompts (e.g. for a scripted install):
+
+```bash
+LUX_PREFLIGHT_DONE=1 ./hub/install.sh
+```
 
 ---
 

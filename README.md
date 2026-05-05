@@ -80,7 +80,7 @@ Then open `http://<hub-host>:5000/` for the events dashboard. Walk past
 the camera and you should see a new event appear with a clip you can play
 inline.
 
-### Upgrading
+### Upgrading and re-installing
 
 Each component upgrades by pulling and re-running its own installer:
 
@@ -91,6 +91,8 @@ cd ~/LuxSecurityCamera && git pull && ./mm_module/install.sh     # on the MagicM
 ```
 
 (After `./install.sh` cleanup, only the surviving component's installer is present — that's the right one to use for upgrades on that box.) All three are idempotent and leave existing config files alone.
+
+**Hub acting up?** Re-running `./hub/install.sh` on the hub host is the recommended fix for almost any hub problem — it rewrites the systemd unit / launchd LaunchAgent and restarts the service while preserving your config, events DB, and recorded clips. Detection-aware: the installer probes for an existing hub on this machine and on the network and walks you through the right next step (re-install vs. migrate vs. recover) before touching anything. See [`INSTALLATION.md` § Re-installing / migrating the hub](INSTALLATION.md#re-installing--migrating-the-hub) for the full walkthrough.
 
 ## Migrating from the embedded-hub setup
 

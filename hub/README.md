@@ -74,6 +74,29 @@ sudo + manual plist work; the installer doesn't do it for you.
 The Linux + macOS installer is **idempotent** — re-run after `git pull`
 to upgrade.
 
+### Pre-flight: existing-hub detection
+
+Before touching anything on disk, the installer:
+
+1. Reads `hub.port` from any existing config and probes
+   `http://localhost:<port>` for `/healthz` + `/cams`. If a hub is already
+   running on this machine, it surfaces a "this looks like a re-install"
+   message — defaults to **Yes, continue** (safe; config and events DB
+   are preserved).
+2. Asks whether you already have a hub running on **another** machine on
+   your network. If you say yes, it probes that URL and shows a
+   structured guidance menu for migrating, recovering, or running both
+   — defaults to **No** (the most common right answer is "fix the
+   existing one, don't stand up a second"). The installer is idempotent
+   on the original host, and most "broken hub" problems are
+   config-related, not install-corruption.
+
+To bypass the prompts (e.g. for a scripted install):
+
+```bash
+LUX_PREFLIGHT_DONE=1 ./hub/install.sh
+```
+
 ## Install — Windows
 
 There's no auto-installer for Windows yet. Clone, install deps, and run
