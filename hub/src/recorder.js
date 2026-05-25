@@ -14,7 +14,7 @@
  *   stop()  → SIGINT to ffmpeg, await clean exit, resolve with the final path.
  *
  * The watch loop polls `cam.frameSeq` (mirrors the `serveMjpeg` pattern in
- * node_helper.js) so frames are written at the camera's actual fps, even
+ * HubServer) so frames are written at the camera's actual fps, even
  * though the detector is only running at ~2 fps to drive session start/stop.
  */
 
@@ -33,7 +33,7 @@ class Recorder {
     /**
      * @param {object} opts
      * @param {object} opts.cam            Cam record (we read lastJpeg/frameSeq).
-     * @param {object} opts.recordingCfg   Module's `recording` config block.
+     * @param {object} opts.recordingCfg   Hub `recording` config block.
      * @param {string} opts.clipsRoot      Root dir for clip output (~ supported).
      * @param {Date}   [opts.startedAt]    Defaults to now.
      * @param {string} [opts.eventType]    Used in the filename. Defaults "person".

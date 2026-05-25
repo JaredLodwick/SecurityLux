@@ -1,4 +1,4 @@
-# LuxSecurityCamera
+# SecurityLux
 
 A self-hosted, LAN-only home security camera system. **No cloud, no
 accounts, no subscriptions.** Cameras stream to a hub on your network; the
@@ -22,8 +22,8 @@ Raspberry Pi 4+ / Pi 5, a Linux desktop, a NUC, or **a Mac**. (Windows is
 supported via a manual recipe — see [`hub/README.md`](hub/README.md#install--windows).)
 
 ```bash
-git clone https://github.com/JaredLodwick/DoorCamera.git ~/LuxSecurityCamera
-cd ~/LuxSecurityCamera
+git clone https://github.com/JaredLodwick/SecurityLux.git ~/SecurityLux
+cd ~/SecurityLux
 ./install.sh             # choose 1) hub
 ```
 
@@ -36,8 +36,8 @@ On each Raspberry Pi attached to a USB webcam (Pi Zero 2 W is the target
 form factor; any Linux Pi works):
 
 ```bash
-git clone https://github.com/JaredLodwick/DoorCamera.git ~/LuxSecurityCamera
-cd ~/LuxSecurityCamera
+git clone https://github.com/JaredLodwick/SecurityLux.git ~/SecurityLux
+cd ~/SecurityLux
 ./install.sh             # choose 2) camera
 ```
 
@@ -52,12 +52,13 @@ If you have a MagicMirror² mirror and want a camera feed on it, run the
 installer there too:
 
 ```bash
-cd ~/LuxSecurityCamera
+cd ~/SecurityLux
 ./install.sh             # choose 3) viewer
 ```
 
-You'll be asked for your MagicMirror install path and the hub URL. The
-installer prints the exact `config.js` snippet to paste in.
+You'll be asked for your MagicMirror install path, hub URL, camera ID, and
+screen position. The installer symlinks the module and updates
+`~/MagicMirror/config/config.js` for you, keeping a timestamped backup.
 
 You don't need MagicMirror — the hub's built-in dashboard is the primary
 UI for the system.
@@ -74,7 +75,7 @@ UI for the system.
 
 ```
 +-------------------+       single outbound       +--------------------+
-| camera_node       | ====== WebSocket ========>  |  LuxSecurityHub    |
+| camera_node       | ====== WebSocket ========>  |  SecurityLuxHub    |
 | (Pi Zero 2 W)     |  binary JPEG frames + JSON  |  (any Linux/macOS) |
 | Python publisher  | <==== set_state on/off ==== |  HTTP+WS on :5000  |
 +-------------------+                             +--------------------+
@@ -99,7 +100,7 @@ UI for the system.
   hub. No special client software needed.
 - **Detection is off by default.** Toggle it via the dashboard or the
   config file — the hub lazy-downloads the YOLO model on first enable.
-- **Per-event clips** land in `~/Videos/SecurityCamera/<YYYY-MM-DD>/…`
+- **Per-event clips** land in `~/Videos/SecurityLux/<YYYY-MM-DD>/…`
   on the hub host. Old events sweep automatically (default retention 14
   days).
 - **No internet required.** The system runs entirely on your LAN. The
@@ -110,7 +111,7 @@ UI for the system.
 ## Components and repo layout
 
 ```
-LuxSecurityCamera/
+SecurityLux/
 ├── install.sh                            # unified installer; pick a component
 │
 ├── hub/                                  # standalone hub server (Node.js)
@@ -129,7 +130,7 @@ LuxSecurityCamera/
 │   └── install.sh
 │
 └── mm_module/                            # optional MagicMirror display
-    ├── MMM-LuxSecurityDisplay/
+    ├── MMM-SecurityLuxDisplay/
     └── install.sh
 ```
 
@@ -137,7 +138,7 @@ LuxSecurityCamera/
 |---|---|---|---|
 | `hub/` | HTTP+WS server, frame buffer, detection, recording, events DB, dashboard | Linux/macOS host with Node 18+ (Windows manual) | Node.js, `ws`, `onnxruntime-node`, `sharp`, `better-sqlite3`, `ffmpeg` |
 | `camera_node/` | USB webcam capture + WebSocket publisher | Raspberry Pi Zero 2 W (or any Linux Pi) | Python 3.11+, `opencv-python-headless`, `websockets` |
-| `mm_module/MMM-LuxSecurityDisplay/` | MagicMirror² display module | MagicMirror Pi (optional) | Pure browser JS, no native deps |
+| `mm_module/MMM-SecurityLuxDisplay/` | MagicMirror² display module | MagicMirror Pi (optional) | Pure browser JS, no native deps |
 
 ---
 
@@ -162,9 +163,9 @@ After `./install.sh` cleanup, only the surviving component's installer is
 present on each device — that's the right one for upgrades there:
 
 ```bash
-cd ~/LuxSecurityCamera && git pull && ./hub/install.sh           # on the hub host
-cd ~/LuxSecurityCamera && git pull && ./camera_node/install.sh   # on a camera Pi
-cd ~/LuxSecurityCamera && git pull && ./mm_module/install.sh     # on the MagicMirror Pi
+cd ~/SecurityLux && git pull && ./hub/install.sh           # on the hub host
+cd ~/SecurityLux && git pull && ./camera_node/install.sh   # on a camera Pi
+cd ~/SecurityLux && git pull && ./mm_module/install.sh     # on the MagicMirror Pi
 ```
 
 All three are idempotent and leave existing config files alone.
@@ -207,11 +208,11 @@ desktop).
 ### Can I run the hub on a Mac?
 
 Yes. The installer detects macOS and registers a launchd LaunchAgent at
-`~/Library/LaunchAgents/com.luxsecurityhub.plist`. It runs while you're
+`~/Library/LaunchAgents/com.securityluxhub.plist`. It runs while you're
 logged in (Macs typically auto-login on boot, so the hub comes back after
 a restart). One quirk: macOS's AirPlay Receiver also wants port 5000 — if
 you see `EADDRINUSE`, either disable AirPlay Receiver or change
-`hub.port` in `~/.config/luxsecurityhub/config.yml`. See
+`hub.port` in `~/.config/securityluxhub/config.yml`. See
 [`hub/README.md`](hub/README.md#install--linux--macos) for details.
 
 ### Can I run the hub on Windows?
@@ -249,8 +250,8 @@ the migration steps:
 2. Update the MagicMirror module's `hubUrl` in `config.js` if you use
    one, then restart MagicMirror.
 3. Stop the hub on the old machine
-   (`sudo systemctl disable --now lux-security-hub` on Linux, or
-   `launchctl unload ~/Library/LaunchAgents/com.luxsecurityhub.plist`
+   (`sudo systemctl disable --now security-lux-hub` on Linux, or
+   `launchctl unload ~/Library/LaunchAgents/com.securityluxhub.plist`
    on macOS).
 
 The wire protocol is unchanged, so the camera_nodes don't need
@@ -258,16 +259,16 @@ re-installation — just a config tweak.
 
 ### Where do recorded clips go?
 
-`~/Videos/SecurityCamera/<YYYY-MM-DD>/<HH-MM-SS>_<cam_id>_person.mkv` on
+`~/Videos/SecurityLux/<YYYY-MM-DD>/<HH-MM-SS>_<cam_id>_person.mkv` on
 the hub host. The events database is at
-`~/.luxsecurityhub/events.db` (`/etc/lux-security-hub/` on Linux is for
+`~/.securityluxhub/events.db` (`/etc/security-lux-hub/` on Linux is for
 config; data lives in the user's home).
 
 ### Does this connect to the internet?
 
 No, the system is fully LAN-only. The single exception is the first-time
 YOLO model download (~6 MB) when you enable detection — after that, the
-model is cached at `~/.luxsecurityhub/models/` and no network is needed.
+model is cached at `~/.securityluxhub/models/` and no network is needed.
 The hub has **no auth and no TLS** — designed for a trusted LAN. Don't
 port-forward port 5000.
 
@@ -289,17 +290,17 @@ that works.
 
 ```bash
 # Hub (Linux):
-sudo systemctl disable --now lux-security-hub
-sudo rm /etc/systemd/system/lux-security-hub.service
+sudo systemctl disable --now security-lux-hub
+sudo rm /etc/systemd/system/security-lux-hub.service
 sudo systemctl daemon-reload
-sudo rm -rf /etc/lux-security-hub                      # config (optional)
-rm -rf ~/.luxsecurityhub ~/Videos/SecurityCamera       # data (optional)
+sudo rm -rf /etc/security-lux-hub                      # config (optional)
+rm -rf ~/.securityluxhub ~/Videos/SecurityLux       # data (optional)
 
 # Hub (macOS):
-launchctl unload ~/Library/LaunchAgents/com.luxsecurityhub.plist
-rm ~/Library/LaunchAgents/com.luxsecurityhub.plist
-rm -rf ~/.config/luxsecurityhub                        # config (optional)
-rm -rf ~/.luxsecurityhub ~/Videos/SecurityCamera       # data (optional)
+launchctl unload ~/Library/LaunchAgents/com.securityluxhub.plist
+rm ~/Library/LaunchAgents/com.securityluxhub.plist
+rm -rf ~/.config/securityluxhub                        # config (optional)
+rm -rf ~/.securityluxhub ~/Videos/SecurityLux       # data (optional)
 
 # Camera node:
 sudo systemctl disable --now camera-node
@@ -307,10 +308,10 @@ sudo rm /etc/systemd/system/camera-node.service
 sudo rm -rf /etc/camera-node
 
 # MagicMirror module:
-rm ~/MagicMirror/modules/MMM-LuxSecurityDisplay
+rm ~/MagicMirror/modules/MMM-SecurityLuxDisplay
 ```
 
-Then `rm -rf ~/LuxSecurityCamera` to remove the repo checkout.
+Then `rm -rf ~/SecurityLux` to remove the repo checkout.
 
 ### A camera connected, but its feed shows "Camera offline"
 
@@ -332,7 +333,6 @@ curl -X POST -H 'Content-Type: application/json' \
 
 ### Migrating from the pre-split (embedded-hub) version
 
-Earlier versions had the hub embedded inside MagicMirror's `MMM-DoorCam`
-module. See
+Earlier versions had the hub embedded inside a MagicMirror module. See
 [`INSTALLATION.md § Migrating from the embedded hub`](INSTALLATION.md#migrating-from-the-embedded-hub)
 for the walkthrough. The wire protocol is unchanged; only the hub moved.

@@ -1,7 +1,7 @@
-# LuxSecurityHub configuration.
+# SecurityLuxHub configuration.
 #
-# Copy this file to /etc/lux-security-hub/config.yml (or anywhere you point
-# $LUXHUB_CONFIG / the first CLI arg at) and tune to taste. Every key has a
+# Copy this file to /etc/security-lux-hub/config.yml (or anywhere you point
+# $SECURITY_LUX_HUB_CONFIG / the first CLI arg at) and tune to taste. Every key has a
 # built-in default; partial files are fine.
 
 hub:
@@ -17,7 +17,7 @@ detection:
   fps: 2                        # detector ticks per second
   confidence: 0.45              # minimum person-class score to count as a detection
   classes: ["person"]
-  modelUrl: "https://github.com/JaredLodwick/DoorCamera/releases/download/models-v1/yolov8n-int8.onnx"
+  modelUrl: "https://github.com/JaredLodwick/SecurityLux/releases/download/models-v1/yolov8n-int8.onnx"
   modelSha256: ""               # set non-empty to enable integrity checking
 
 # --- Per-event video recording ---
@@ -30,8 +30,8 @@ recording:
   retentionDays: 14      # daily sweep deletes events + clips older than this
 
 storage:
-  clipsRoot: "~/Videos/SecurityCamera"     # mkv/mp4 files land here, organized by date
-  dbPath: "~/.luxsecurityhub/events.db"    # SQLite event log
+  clipsRoot: "~/Videos/SecurityLux"     # mkv/mp4 files land here, organized by date
+  dbPath: "~/.securityluxhub/events.db"    # SQLite event log
 
 logging:
   level: info            # debug | info | warn | error

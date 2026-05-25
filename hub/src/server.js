@@ -1,7 +1,7 @@
 "use strict";
 
 /**
- * LuxSecurityHub — HTTP + WebSocket server.
+ * SecurityLuxHub — HTTP + WebSocket server.
  *
  * Camera nodes connect over WS at  ws://<host>:<port>/cam/<cam_id>
  * and push binary JPEG frames; the hub buffers the latest frame per camera,
@@ -9,15 +9,14 @@
  * records per-event clips through ffmpeg, and exposes everything else over
  * HTTP for browsers / scripts / other consumers.
  *
- * This file used to be `mm_module/MMM-DoorCam/node_helper.js` — it lived
- * inside MagicMirror as a NodeHelper. The split into a standalone hub
- * means dropping three MagicMirror-isms:
+ * Earlier versions lived inside MagicMirror as a NodeHelper. The split into
+ * a standalone hub means dropping three MagicMirror-isms:
  *
  *   - NodeHelper.create({ start, stop, ... }) → plain class instantiated
  *     by `hub.js`. Lifecycle is now `await new HubServer(cfg, log).start()`.
  *   - `Log` from MM's bundle → injected logger (see ./log.js).
- *   - socketNotificationReceived(DOORCAM_INIT, …) carrying config →
- *     config now comes via constructor args from a YAML file.
+ *   - socketNotificationReceived(...) carrying config → config now comes via
+ *     constructor args from a YAML file.
  *
  * Browsers used to receive live status via socketNotification; with the
  * MM frontend gone, they poll `GET /cam/<id>/status` instead. `pushStatus`
@@ -50,8 +49,8 @@ class HubServer {
 
         this.detectionCfg = cfg.detection || { enabled: false };
         this.recordingCfg = cfg.recording || {};
-        this.clipsRoot = (cfg.storage && cfg.storage.clipsRoot) || "~/Videos/SecurityCamera";
-        this.dbPath = (cfg.storage && cfg.storage.dbPath) || "~/.luxsecurityhub/events.db";
+        this.clipsRoot = (cfg.storage && cfg.storage.clipsRoot) || "~/Videos/SecurityLux";
+        this.dbPath = (cfg.storage && cfg.storage.dbPath) || "~/.securityluxhub/events.db";
 
         this.cams = new Map();
         this.server = null;

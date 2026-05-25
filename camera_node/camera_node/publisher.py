@@ -1,6 +1,6 @@
-"""WebSocket publisher — pushes frames and status to the MagicMirror hub.
+"""WebSocket publisher — pushes frames and status to SecurityLuxHub.
 
-The Pi camera is a low-power node; the always-on Mirror Pi is the hub. This
+The Pi camera is a low-power node; the always-on hub owns camera state. This
 module connects out to ``ws://<hub>/cam/<cam_id>``, sends:
 
   * binary JPEG frames while the camera is on (last-writer-wins, fps-capped)

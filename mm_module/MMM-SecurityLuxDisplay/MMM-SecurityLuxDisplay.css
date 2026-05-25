@@ -1,14 +1,14 @@
-.mmm-luxsecurity-display {
+.mmm-securitylux-display {
 	color: #ddd;
 	font-family: inherit;
 	text-align: right;
 }
 
-.mmm-luxsecurity-display.hidden-when-off {
+.mmm-securitylux-display.hidden-when-off {
 	display: none;
 }
 
-.mmm-luxsecurity-display .lux-title {
+.mmm-securitylux-display .securitylux-title {
 	font-size: 0.85em;
 	letter-spacing: 0.08em;
 	text-transform: uppercase;
@@ -16,7 +16,7 @@
 	margin-bottom: 4px;
 }
 
-.mmm-luxsecurity-display .lux-frame {
+.mmm-securitylux-display .securitylux-frame {
 	position: relative;
 	background: #111;
 	border: 1px solid #333;
@@ -28,21 +28,21 @@
 	justify-content: center;
 }
 
-.mmm-luxsecurity-display .lux-stream {
+.mmm-securitylux-display .securitylux-stream {
 	width: 100%;
 	height: 100%;
 	object-fit: cover;
 	display: block;
 }
 
-.mmm-luxsecurity-display .lux-placeholder {
+.mmm-securitylux-display .securitylux-placeholder {
 	color: #888;
 	font-size: 0.9em;
 	padding: 12px;
 	text-align: center;
 }
 
-.mmm-luxsecurity-display .lux-placeholder.lux-placeholder-error {
+.mmm-securitylux-display .securitylux-placeholder.securitylux-placeholder-error {
 	color: #c66;
 	font-size: 0.75em;
 	word-break: break-all;
@@ -50,13 +50,13 @@
 
 /* --- Bounding-box overlay drawn on top of the live MJPEG. --- */
 
-.mmm-luxsecurity-display .lux-bbox-layer {
+.mmm-securitylux-display .securitylux-bbox-layer {
 	position: absolute;
 	inset: 0;
 	pointer-events: none;
 }
 
-.mmm-luxsecurity-display .lux-bbox {
+.mmm-securitylux-display .securitylux-bbox {
 	position: absolute;
 	border: 2px solid #00ff88;
 	border-radius: 2px;
@@ -64,7 +64,7 @@
 	transition: left 220ms ease-out, top 220ms ease-out, width 220ms ease-out, height 220ms ease-out;
 }
 
-.mmm-luxsecurity-display .lux-bbox-label {
+.mmm-securitylux-display .securitylux-bbox-label {
 	position: absolute;
 	bottom: 100%;
 	left: -2px;
@@ -80,7 +80,7 @@
 
 /* --- Status bar: two-column flex. --- */
 
-.mmm-luxsecurity-display .lux-status {
+.mmm-securitylux-display .securitylux-status {
 	display: flex;
 	justify-content: space-between;
 	align-items: center;
@@ -92,45 +92,45 @@
 	min-height: 1.2em;   /* reserve space so the bar doesn't jump when the chip appears */
 }
 
-.mmm-luxsecurity-display .lux-status-left {
+.mmm-securitylux-display .securitylux-status-left {
 	flex: 1 1 auto;
 	text-align: left;
 	min-width: 0;
 }
 
-.mmm-luxsecurity-display .lux-status-right {
+.mmm-securitylux-display .securitylux-status-right {
 	flex: 0 0 auto;
 	display: inline-flex;
 	gap: 8px;
 	align-items: center;
 }
 
-.mmm-luxsecurity-display .lux-state {
+.mmm-securitylux-display .securitylux-state {
 	color: #bbb;
 }
 
-.mmm-luxsecurity-display .lux-state-offline {
+.mmm-securitylux-display .securitylux-state-offline {
 	color: #c66;
 }
 
-.mmm-luxsecurity-display .lux-battery {
+.mmm-securitylux-display .securitylux-battery {
 	color: #bbb;
 }
 
-.mmm-luxsecurity-display .lux-event-chip {
+.mmm-securitylux-display .securitylux-event-chip {
 	color: #00ff88;
 	font-weight: 500;
-	animation: lux-event-pulse 1.6s ease-in-out infinite;
+	animation: securitylux-event-pulse 1.6s ease-in-out infinite;
 }
 
-@keyframes lux-event-pulse {
+@keyframes securitylux-event-pulse {
 	0%, 100% { opacity: 1; }
 	50% { opacity: 0.55; }
 }
 
 /* --- Toggle (kept for users who opt back into showToggleButton). --- */
 
-.mmm-luxsecurity-display .lux-toggle {
+.mmm-securitylux-display .securitylux-toggle {
 	margin-top: 6px;
 	background: transparent;
 	color: #ccc;
@@ -142,12 +142,12 @@
 	font-family: inherit;
 }
 
-.mmm-luxsecurity-display .lux-toggle:hover:not(:disabled) {
+.mmm-securitylux-display .securitylux-toggle:hover:not(:disabled) {
 	border-color: #888;
 	color: #fff;
 }
 
-.mmm-luxsecurity-display .lux-toggle:disabled {
+.mmm-securitylux-display .securitylux-toggle:disabled {
 	opacity: 0.4;
 	cursor: not-allowed;
 }

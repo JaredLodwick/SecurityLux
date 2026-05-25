@@ -1,13 +1,12 @@
-# LuxSecurity — camera_node
+# SecurityLux — camera_node
 
-The Python service that runs on the Raspberry Pi Zero 2 W at the door. It
-captures frames from a USB UVC webcam and **publishes them over a single
-WebSocket to the MagicMirror hub** (the `MMM-DoorCam` module's `node_helper`
-running on the always-on mirror Pi). The hub buffers the latest frame and
-exposes it to viewers; this client never opens an inbound port.
+The Python service that runs on a Raspberry Pi Zero 2 W with a USB UVC
+webcam. It captures frames and **publishes them over a single WebSocket to
+SecurityLuxHub**. The hub buffers the latest frame and exposes it to viewers;
+this client never opens an inbound port.
 
-The mirror is the hub for the household's smart devices. Cameras are small,
-low-power, often battery-backed — so the camera side stays minimal:
+Cameras are small, low-power, often battery-backed devices, so the camera
+side stays minimal:
 
 - one outbound WebSocket connection
 - binary JPEG frames pushed only while the feed is on
@@ -24,7 +23,7 @@ root as `PRD.md`.
 ## What's in this folder
 
 ```
-pi_client/
+camera_node/
   camera_node/         # the Python package (run via `python -m camera_node`)
     publisher.py       # WS client: frame pump, status pump, command receive
     camera.py          # capture thread + real/mock camera (unchanged)
@@ -55,11 +54,11 @@ Reconnects use exponential backoff (1s → 30s).
 
 The camera layer transparently falls back to a mock source when there is no
 working V4L2 device, so you can develop on a laptop. To exercise the full
-pipeline you also need the hub running — start MagicMirror with the
-`MMM-DoorCam` module loaded, or run any `ws://` test server on port 5000.
+pipeline you also need SecurityLuxHub running, or any `ws://` test server on
+port 5000.
 
 ```bash
-cd pi_client
+cd camera_node
 python3 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
@@ -71,8 +70,8 @@ python -m camera_node
 ```
 
 You should see `Connecting to hub at ws://meer.local:5000/cam/front` in the
-logs. Once the hub responds with `set_state: on` (e.g. via the toggle button
-on the mirror or `curl -X POST http://meer.local:5000/cam/front/toggle`),
+logs. Once the hub responds with `set_state: on` (e.g. via
+`curl -X POST http://meer.local:5000/cam/front/toggle`),
 the camera opens the device and starts streaming.
 
 ### Using a real camera
@@ -82,7 +81,7 @@ On the Pi (or any Linux box with a UVC webcam):
 1. Confirm the device: `ls /dev/video*` and `v4l2-ctl --list-devices`.
 2. Copy `config.example.yml` to `config.yml` and adjust `camera.device`,
    `camera.resolution`, `camera.fps`, and `camera.id`.
-3. Set `hub.url` to your mirror — e.g. `ws://meer.local:5000`.
+3. Set `hub.url` to your hub — e.g. `ws://meer.local:5000`.
 4. Start the service: `python -m camera_node`.
 
 Config is read from, in order: `$CAMERA_NODE_CONFIG` → `/etc/camera-node/config.yml`
@@ -93,9 +92,9 @@ Config is read from, in order: `$CAMERA_NODE_CONFIG` → `/etc/camera-node/confi
 The fast path: clone the repo on the camera Pi and run the installer.
 
 ```bash
-git clone https://github.com/JaredLodwick/DoorCamera.git ~/DoorCamera
-cd ~/DoorCamera
-./pi_client/install.sh
+git clone https://github.com/JaredLodwick/SecurityLux.git ~/SecurityLux
+cd ~/SecurityLux
+./camera_node/install.sh
 ```
 
 The script auto-detects the user and install path, installs apt + pip deps,
@@ -117,7 +116,7 @@ If the installer doesn't fit (different init system, custom layout, etc.),
 do it by hand:
 
 ```bash
-cd ~/DoorCamera/pi_client
+cd ~/SecurityLux/camera_node
 python3 -m venv .venv
 .venv/bin/pip install --upgrade pip
 .venv/bin/pip install -r requirements.txt
@@ -133,7 +132,7 @@ only paths you need to template.
 ## Running the tests
 
 ```bash
-cd pi_client
+cd camera_node
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt

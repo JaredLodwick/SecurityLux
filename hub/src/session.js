@@ -26,10 +26,10 @@ class SessionManager {
     /**
      * @param {object} opts
      * @param {object} opts.store        Store instance (already opened).
-     * @param {object} opts.recordingCfg Module's `recording` config block.
+     * @param {object} opts.recordingCfg Hub `recording` config block.
      * @param {string} opts.clipsRoot
      * @param {Function} opts.recorderFactory  `(cam, opts) => Recorder` (injected for tests).
-     * @param {Function} opts.getCam     `(camId) => cam record` from node_helper.
+     * @param {Function} opts.getCam     `(camId) => cam record` from HubServer.
      * @param {object} [opts.logger]
      * @param {Function} [opts.now]      Override time source (for tests).
      */
@@ -106,7 +106,7 @@ class SessionManager {
 
     /**
      * End every active session. Returns once all recorders have finalized.
-     * Used by node_helper.stop().
+     * Used by HubServer.stop().
      */
     async forceEndAll(reason) {
         const ids = [...this.sessions.keys()];

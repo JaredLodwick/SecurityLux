@@ -1,6 +1,6 @@
-# MMM-LuxSecurityDisplay
+# MMM-SecurityLuxDisplay
 
-A MagicMirror² module that displays a single camera from a [LuxSecurityHub](../../hub/)
+A MagicMirror² module that displays a single camera from a [SecurityLuxHub](../../hub/)
 on your mirror. Pure browser-side — no `node_helper`, no embedded server, no
 npm dependencies. It just polls the hub's HTTP API and renders an MJPEG
 `<img>` plus a small status row.
@@ -11,27 +11,16 @@ The hub must already be running somewhere reachable on your LAN — see
 [`../../hub/README.md`](../../hub/README.md). Then on the MagicMirror Pi:
 
 ```bash
-git clone https://github.com/JaredLodwick/DoorCamera.git ~/DoorCamera
-cd ~/DoorCamera
+git clone https://github.com/JaredLodwick/SecurityLux.git ~/SecurityLux
+cd ~/SecurityLux
 ./mm_module/install.sh
 ```
 
-That symlinks `~/MagicMirror/modules/MMM-LuxSecurityDisplay` to this directory.
-No `npm install` step — there are no module-side deps.
-
-Then add an entry to `~/MagicMirror/config/config.js`:
-
-```js
-{
-  module: "MMM-LuxSecurityDisplay",
-  position: "bottom_right",
-  config: {
-    hubUrl: "http://meer.local:5000",   // wherever your LuxSecurityHub is
-    camId: "front",                     // matches camera_node config
-    title: "Door Cam"
-  }
-}
-```
+That symlinks `~/MagicMirror/modules/MMM-SecurityLuxDisplay` to this directory.
+No `npm install` step — there are no module-side deps. The installer also
+updates `~/MagicMirror/config/config.js` after asking for the hub URL, camera
+ID, and MagicMirror position. It backs up the previous config as
+`config.js.securitylux.bak.*`.
 
 Restart MagicMirror. The module will start polling the hub.
 
@@ -39,14 +28,14 @@ Restart MagicMirror. The module will start polling the hub.
 
 | Option                | Default                       | Notes |
 |-----------------------|-------------------------------|-------|
-| `hubUrl`              | `http://meer.local:5000`      | LuxSecurityHub base URL. |
+| `hubUrl`              | `http://meer.local:5000`      | SecurityLuxHub base URL. |
 | `camId`               | `front`                       | Identifier used by the camera_node publisher. |
 | `pollMs`              | `500`                         | How often to poll `GET /cam/<id>/status`. Matches the default detector tick rate. |
 | `hideWhenOff`         | `true`                        | Hide the module entirely when the feed is off. |
 | `showToggleButton`    | `false`                       | Show a Turn ON/OFF button under the feed. |
 | `showStatusBar`       | `true`                        | Show the bottom row (detection chip + state + battery). |
 | `width`               | `320px`                       | Width of the module. |
-| `title`               | `Door Cam`                    | Header text. Empty string hides it. |
+| `title`               | `Security Lux`                    | Header text. Empty string hides it. |
 | `streamRefreshSeconds`| `300`                         | Periodic MJPEG refresh as a fallback against silent drops. |
 | `staleFrameMs`        | `10000`                       | Threshold on hub's `last_frame_age_ms` for triggering a refresh. |
 | `errorRetryMs`        | `1500`                        | How long to wait after an `<img>` error before re-fetching. |
@@ -68,15 +57,14 @@ Restart MagicMirror. The module will start polling the hub.
 
 ## Notifications
 
-The module accepts these MM2 notifications (`LUX_*` is the new name; the old
-`DOORCAM_*` aliases also work for backwards compatibility):
+The module accepts these MM2 notifications:
 
-- `LUX_TOGGLE` — flip the feed.
-- `LUX_ON` — force the feed on.
-- `LUX_OFF` — force the feed off.
+- `SECURITY_LUX_TOGGLE` — flip the feed.
+- `SECURITY_LUX_ON` — force the feed on.
+- `SECURITY_LUX_OFF` — force the feed off.
 
 ## See also
 
-- `../../hub/` — the standalone LuxSecurityHub server
+- `../../hub/` — the standalone SecurityLuxHub server
 - `../../camera_node/` — the Pi-side WebSocket publisher
 - `../../PRD.md` — full architecture

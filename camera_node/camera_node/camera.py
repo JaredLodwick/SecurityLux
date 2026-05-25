@@ -9,7 +9,7 @@ queueing, no backpressure).
 If OpenCV can't open the configured V4L2 device (e.g. during laptop
 development) the manager transparently falls back to a synthetic source that
 renders a dark-gray frame with a live timestamp and a frame counter. This lets
-the publisher and the MagicMirror hub be developed without any hardware.
+the publisher and SecurityLuxHub be developed without any hardware.
 """
 
 from __future__ import annotations

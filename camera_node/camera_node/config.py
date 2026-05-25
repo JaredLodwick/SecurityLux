@@ -1,4 +1,4 @@
-"""Configuration loader for Door Cam.
+"""Configuration loader for Security Lux.
 
 Resolves the active config by merging built-in defaults with the first YAML
 file found in this priority order:

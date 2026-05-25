@@ -1,6 +1,6 @@
-# LuxSecurityHub
+# SecurityLuxHub
 
-Standalone hub for the LuxSecurity camera system. Runs as a regular Node.js
+Standalone hub for the SecurityLux camera system. Runs as a regular Node.js
 service — no MagicMirror required. Camera nodes connect to it over WebSocket
 and push JPEG frames; the hub buffers the latest frame per camera, runs
 optional on-host person detection, records per-event video clips, and
@@ -25,8 +25,8 @@ The hub is just one Node.js process. It can run on:
 The same installer covers both. Clone and run:
 
 ```bash
-git clone https://github.com/JaredLodwick/DoorCamera.git ~/LuxSecurityCamera
-cd ~/LuxSecurityCamera
+git clone https://github.com/JaredLodwick/SecurityLux.git ~/SecurityLux
+cd ~/SecurityLux
 ./hub/install.sh
 ```
 
@@ -38,9 +38,9 @@ It detects your OS and dispatches:
    (detection still works, recording silently skips without it).
 2. `npm install --omit=dev` inside `hub/` (pulls `onnxruntime-node`,
    `sharp`, `better-sqlite3`, `ws`, `js-yaml`).
-3. Bootstraps `/etc/lux-security-hub/config.yml` from `config.example.yml`
+3. Bootstraps `/etc/security-lux-hub/config.yml` from `config.example.yml`
    (only if absent — re-runs preserve customization).
-4. Generates `/etc/systemd/system/lux-security-hub.service` with your
+4. Generates `/etc/systemd/system/security-lux-hub.service` with your
    user + install path templated in. `Restart=on-failure`, comes back on
    reboot.
 5. Enables, starts, and verifies. Prints a summary of useful commands.
@@ -50,9 +50,9 @@ It detects your OS and dispatches:
 1. Same Node + npm sanity checks. Warns if `ffmpeg` is missing
    (`brew install ffmpeg`).
 2. `npm install --omit=dev` inside `hub/`.
-3. Bootstraps `~/.config/luxsecurityhub/config.yml` from `config.example.yml`.
+3. Bootstraps `~/.config/securityluxhub/config.yml` from `config.example.yml`.
    No sudo needed for any of this — everything is per-user.
-4. Writes `~/Library/LaunchAgents/com.luxsecurityhub.plist` with `RunAtLoad`
+4. Writes `~/Library/LaunchAgents/com.securityluxhub.plist` with `RunAtLoad`
    and `KeepAlive` on Crashed.
 5. `launchctl load -w` it; verifies; prints useful commands.
 
@@ -60,9 +60,9 @@ It detects your OS and dispatches:
 > port 5000 by default. If the hub log shows
 > `EADDRINUSE: address already in use 0.0.0.0:5000`, either:
 > - Disable AirPlay Receiver: System Settings → General → AirDrop & Handoff
-> - Or change the hub port: edit `~/.config/luxsecurityhub/config.yml`
+> - Or change the hub port: edit `~/.config/securityluxhub/config.yml`
 >   and set `hub.port: 5001` (or anything free), then
->   `launchctl unload ~/Library/LaunchAgents/com.luxsecurityhub.plist`
+>   `launchctl unload ~/Library/LaunchAgents/com.securityluxhub.plist`
 >   and `launchctl load -w …` to restart.
 
 The macOS install runs the hub as a **LaunchAgent** (per-user). It comes
@@ -94,7 +94,7 @@ Before touching anything on disk, the installer:
 To bypass the prompts (e.g. for a scripted install):
 
 ```bash
-LUX_PREFLIGHT_DONE=1 ./hub/install.sh
+SECURITY_LUX_PREFLIGHT_DONE=1 ./hub/install.sh
 ```
 
 ## Install — Windows
@@ -104,8 +104,8 @@ manually — or wrap it in a Windows Service yourself.
 
 ```powershell
 # In an admin PowerShell (or a regular one if Node is on PATH):
-git clone https://github.com/JaredLodwick/DoorCamera.git C:\LuxSecurityCamera
-cd C:\LuxSecurityCamera\hub
+git clone https://github.com/JaredLodwick/SecurityLux.git C:\SecurityLux
+cd C:\SecurityLux\hub
 npm install --omit=dev
 
 # Optional: install ffmpeg via Chocolatey or Scoop for clip recording
@@ -123,19 +123,19 @@ approach is [NSSM](https://nssm.cc/) ("the non-sucking service manager"):
 
 ```powershell
 # After downloading NSSM and putting nssm.exe on your PATH:
-nssm install LuxSecurityHub "C:\Program Files\nodejs\node.exe" "C:\LuxSecurityCamera\hub\src\hub.js"
-nssm set    LuxSecurityHub AppDirectory "C:\LuxSecurityCamera\hub"
-nssm set    LuxSecurityHub AppEnvironmentExtra "LUXHUB_CONFIG=%USERPROFILE%\.config\luxsecurityhub\config.yml"
-nssm set    LuxSecurityHub AppStdout "%USERPROFILE%\AppData\Local\LuxSecurityHub\stdout.log"
-nssm set    LuxSecurityHub AppStderr "%USERPROFILE%\AppData\Local\LuxSecurityHub\stderr.log"
-nssm start  LuxSecurityHub
+nssm install SecurityLuxHub "C:\Program Files\nodejs\node.exe" "C:\SecurityLux\hub\src\hub.js"
+nssm set    SecurityLuxHub AppDirectory "C:\SecurityLux\hub"
+nssm set    SecurityLuxHub AppEnvironmentExtra "SECURITY_LUX_HUB_CONFIG=%USERPROFILE%\.config\securityluxhub\config.yml"
+nssm set    SecurityLuxHub AppStdout "%USERPROFILE%\AppData\Local\SecurityLuxHub\stdout.log"
+nssm set    SecurityLuxHub AppStderr "%USERPROFILE%\AppData\Local\SecurityLuxHub\stderr.log"
+nssm start  SecurityLuxHub
 
 # Bootstrap the config dir if it doesn't exist yet:
-mkdir "$env:USERPROFILE\.config\luxsecurityhub"
-copy config.example.yml "$env:USERPROFILE\.config\luxsecurityhub\config.yml"
+mkdir "$env:USERPROFILE\.config\securityluxhub"
+copy config.example.yml "$env:USERPROFILE\.config\securityluxhub\config.yml"
 ```
 
-Manage with `nssm restart LuxSecurityHub`, `nssm stop LuxSecurityHub`, etc.
+Manage with `nssm restart SecurityLuxHub`, `nssm stop SecurityLuxHub`, etc.
 
 A first-class `install.ps1` is on the roadmap; PRs welcome.
 
@@ -144,8 +144,8 @@ A first-class `install.ps1` is on the roadmap; PRs welcome.
 ```bash
 cd hub
 npm install
-node src/hub.js                                   # uses ~/.config/luxsecurityhub/config.yml or built-in defaults
-LUXHUB_CONFIG=/tmp/luxhub.yml node src/hub.js     # or point at any YAML
+node src/hub.js                                   # uses ~/.config/securityluxhub/config.yml or built-in defaults
+SECURITY_LUX_HUB_CONFIG=/tmp/securityluxhub.yml node src/hub.js     # or point at any YAML
 node src/hub.js /path/to/config.yml               # or pass it as a CLI arg
 ```
 
@@ -153,9 +153,9 @@ The hub binds to `0.0.0.0:5000` by default. Open `http://<host>:5000/`
 for the events dashboard. Config search order:
 
 1. CLI arg (`node src/hub.js /path/to/config.yml`)
-2. `$LUXHUB_CONFIG` env var
-3. `~/.config/luxsecurityhub/config.yml` (user-level; cross-OS)
-4. `/etc/lux-security-hub/config.yml` (system-level; Linux/systemd)
+2. `$SECURITY_LUX_HUB_CONFIG` env var
+3. `~/.config/securityluxhub/config.yml` (user-level; cross-OS)
+4. `/etc/security-lux-hub/config.yml` (system-level; Linux/systemd)
 5. Built-in defaults (with a `config file not found` warning)
 
 ## HTTP endpoints
@@ -210,5 +210,5 @@ curl -X POST -H 'Content-Type: application/json' \
 ## See also
 
 - `../camera_node/` — the Pi Zero publisher
-- `../mm_module/MMM-LuxSecurityDisplay/` — optional MagicMirror display
+- `../mm_module/MMM-SecurityLuxDisplay/` — optional MagicMirror display
 - `../PRD.md` — full product / architecture doc

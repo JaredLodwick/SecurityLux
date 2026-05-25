@@ -1,8 +1,8 @@
 /**
- * MMM-LuxSecurityDisplay — MagicMirror² display for LuxSecurityHub.
+ * MMM-SecurityLuxDisplay — MagicMirror² display for SecurityLuxHub.
  *
  * Pure browser-side module. No node_helper, no embedded server. Talks to a
- * remote LuxSecurityHub over HTTP:
+ * remote SecurityLuxHub over HTTP:
  *
  *   - Live MJPEG  →  <img src="${hubUrl}/cam/<camId>/stream.mjpg?t=...">
  *   - Live status →  fetch(${hubUrl}/cam/<camId>/status) every `pollMs`
@@ -26,9 +26,9 @@ function detectionEqual (a, b) {
 		&& Math.abs((ab.h  || 0) - (bb.h  || 0)) < eps;
 }
 
-Module.register("MMM-LuxSecurityDisplay", {
+Module.register("MMM-SecurityLuxDisplay", {
 	defaults: {
-		hubUrl: "http://meer.local:5000",   // any reachable LuxSecurityHub
+		hubUrl: "http://meer.local:5000",   // any reachable SecurityLuxHub
 		camId: "front",                     // matches the camera_node's `camera.id`
 
 		// Display options.
@@ -36,7 +36,7 @@ Module.register("MMM-LuxSecurityDisplay", {
 		showToggleButton: false,
 		showStatusBar: true,
 		width: "320px",
-		title: "Door Cam",
+		title: "Security Lux",
 
 		// Polling + stream-recovery knobs.
 		pollMs: 500,                        // matches default detector tick rate
@@ -68,15 +68,15 @@ Module.register("MMM-LuxSecurityDisplay", {
 	},
 
 	getStyles () {
-		return [this.file("MMM-LuxSecurityDisplay.css")];
+		return [this.file("MMM-SecurityLuxDisplay.css")];
 	},
 
 	notificationReceived (notification) {
-		if (notification === "LUX_TOGGLE" || notification === "DOORCAM_TOGGLE") {
+		if (notification === "SECURITY_LUX_TOGGLE") {
 			this.requestToggle();
-		} else if (notification === "LUX_ON" || notification === "DOORCAM_ON") {
+		} else if (notification === "SECURITY_LUX_ON") {
 			this.requestToggle("on");
-		} else if (notification === "LUX_OFF" || notification === "DOORCAM_OFF") {
+		} else if (notification === "SECURITY_LUX_OFF") {
 			this.requestToggle("off");
 		}
 	},
@@ -198,7 +198,7 @@ Module.register("MMM-LuxSecurityDisplay", {
 	 */
 	_refreshStreamSrc () {
 		const wrapper = document.getElementById(this.identifier);
-		const oldImg = wrapper && wrapper.querySelector(".lux-stream");
+		const oldImg = wrapper && wrapper.querySelector(".securitylux-stream");
 		if (oldImg && oldImg.src) {
 			try { oldImg.src = ""; } catch (_) { /* ignore */ }
 		}
@@ -234,7 +234,7 @@ Module.register("MMM-LuxSecurityDisplay", {
 
 	getDom () {
 		const wrap = document.createElement("div");
-		wrap.className = "mmm-luxsecurity-display";
+		wrap.className = "mmm-securitylux-display";
 		wrap.style.width = this.config.width;
 
 		if (this.config.hideWhenOff && this.cameraState === "off") {
@@ -244,13 +244,13 @@ Module.register("MMM-LuxSecurityDisplay", {
 
 		if (this.config.title) {
 			const title = document.createElement("div");
-			title.className = "lux-title";
+			title.className = "securitylux-title";
 			title.textContent = this.config.title;
 			wrap.appendChild(title);
 		}
 
 		const frame = document.createElement("div");
-		frame.className = "lux-frame";
+		frame.className = "securitylux-frame";
 		frame.appendChild(this.renderVideoChild());
 		const overlay = this.renderBboxOverlay();
 		if (overlay) frame.appendChild(overlay);
@@ -266,7 +266,7 @@ Module.register("MMM-LuxSecurityDisplay", {
 		const s = this.status;
 		if (this.cameraState === "on" && s && s.connected) {
 			const img = document.createElement("img");
-			img.className = "lux-stream";
+			img.className = "securitylux-stream";
 			img.alt = `Live ${this.config.camId} camera feed`;
 			img.src = this._streamUrl();
 			img.addEventListener("error", () => {
@@ -276,11 +276,11 @@ Module.register("MMM-LuxSecurityDisplay", {
 			return img;
 		}
 		const placeholder = document.createElement("div");
-		placeholder.className = "lux-placeholder";
+		placeholder.className = "securitylux-placeholder";
 		if (!s) {
 			placeholder.textContent = "Connecting to hub…";
 		} else if (s.connected === false) {
-			placeholder.classList.add("lux-placeholder-error");
+			placeholder.classList.add("securitylux-placeholder-error");
 			placeholder.textContent = `Camera "${this.config.camId}" offline`;
 		} else {
 			placeholder.textContent = "Camera off";
@@ -302,10 +302,10 @@ Module.register("MMM-LuxSecurityDisplay", {
 		if (![cx, cy, w, h].every((n) => typeof n === "number" && isFinite(n))) return null;
 
 		const layer = document.createElement("div");
-		layer.className = "lux-bbox-layer";
+		layer.className = "securitylux-bbox-layer";
 
 		const box = document.createElement("div");
-		box.className = "lux-bbox";
+		box.className = "securitylux-bbox";
 		const left = Math.max(0, (cx - w / 2)) * 100;
 		const top = Math.max(0, (cy - h / 2)) * 100;
 		const widthPct = Math.min(100 - left, w * 100);
@@ -316,7 +316,7 @@ Module.register("MMM-LuxSecurityDisplay", {
 		box.style.height = `${heightPct}%`;
 
 		const label = document.createElement("span");
-		label.className = "lux-bbox-label";
+		label.className = "securitylux-bbox-label";
 		const conf = Math.round((s.current_detection.confidence || 0) * 100);
 		const cls = s.current_detection.class || "object";
 		label.textContent = conf > 0 ? `${cls} ${conf}%` : cls;
@@ -328,37 +328,37 @@ Module.register("MMM-LuxSecurityDisplay", {
 
 	renderStatusBar () {
 		const bar = document.createElement("div");
-		bar.className = "lux-status";
+		bar.className = "securitylux-status";
 		const s = this.status || {};
 
 		const left = document.createElement("div");
-		left.className = "lux-status-left";
+		left.className = "securitylux-status-left";
 		if (s.current_detection) {
 			const chip = document.createElement("span");
-			chip.className = "lux-event-chip";
+			chip.className = "securitylux-event-chip";
 			const cls = s.current_detection.class || "object";
 			chip.textContent = `${cls.charAt(0).toUpperCase() + cls.slice(1)} detected`;
 			left.appendChild(chip);
 		}
 
 		const right = document.createElement("div");
-		right.className = "lux-status-right";
+		right.className = "securitylux-status-right";
 		if (s.state) {
 			const state = document.createElement("span");
-			state.className = "lux-state";
+			state.className = "securitylux-state";
 			state.textContent = s.state.toUpperCase();
 			right.appendChild(state);
 		}
 		if (typeof s.battery_pct === "number" && isFinite(s.battery_pct)) {
 			const battery = document.createElement("span");
-			battery.className = "lux-battery";
+			battery.className = "securitylux-battery";
 			const pct = Math.round(s.battery_pct);
 			battery.textContent = s.on_battery === false ? `${pct}% ⚡` : `${pct}%`;
 			right.appendChild(battery);
 		}
 		if (s.connected === false) {
 			const off = document.createElement("span");
-			off.className = "lux-state lux-state-offline";
+			off.className = "securitylux-state securitylux-state-offline";
 			off.textContent = "OFFLINE";
 			right.appendChild(off);
 		}
@@ -371,7 +371,7 @@ Module.register("MMM-LuxSecurityDisplay", {
 	renderToggleButton () {
 		const btn = document.createElement("button");
 		btn.type = "button";
-		btn.className = "lux-toggle";
+		btn.className = "securitylux-toggle";
 		const connected = this.status && this.status.connected;
 		if (!connected) {
 			btn.textContent = "Unavailable";

@@ -1,10 +1,9 @@
 "use strict";
 
 /**
- * Tiny console-backed logger that mirrors MagicMirror's `Log` API surface
- * (`info`, `warn`, `error`, `debug`). Used everywhere the old
- * `node_helper.js` called `Log.x(...)`. Centralizing it here keeps swap
- * potential (pino, winston) easy without touching call sites.
+ * Tiny console-backed logger with the `info`, `warn`, `error`, and `debug`
+ * methods used by the hub. Centralizing it here keeps swap potential (pino,
+ * winston) easy without touching call sites.
  */
 
 const LEVELS = { debug: 10, info: 20, warn: 30, error: 40 };

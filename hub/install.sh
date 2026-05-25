@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# LuxSecurityHub — standalone hub installer.
+# SecurityLuxHub — standalone hub installer.
 #
 # Cross-OS: Linux (systemd) and macOS (launchd LaunchAgent). Windows users
 # install manually — see hub/README.md "Windows" section.
@@ -11,8 +11,8 @@
 #   2. npm install --omit=dev inside hub/.
 #   3. Bootstrap a config.yml at the platform-appropriate path.
 #   4. Register the hub as an OS service:
-#        Linux  → /etc/systemd/system/lux-security-hub.service
-#        macOS  → ~/Library/LaunchAgents/com.luxsecurityhub.plist
+#        Linux  → /etc/systemd/system/security-lux-hub.service
+#        macOS  → ~/Library/LaunchAgents/com.securityluxhub.plist
 #   5. Start it; verify; print useful commands.
 
 set -euo pipefail
@@ -87,7 +87,7 @@ fi
 # prompted once per install attempt.
 
 probe_hub () {
-    # Returns 0 iff the URL responds like a LuxSecurityHub.
+    # Returns 0 iff the URL responds like a SecurityLuxHub.
     # Two-shot probe: /healthz returns "ok" AND /cams returns a JSON array.
     # Stronger than just /healthz so we don't false-positive on random
     # services that happen to expose /healthz.
@@ -105,7 +105,7 @@ guess_existing_hub_port () {
     # Otherwise default to 5000. We don't pull in a YAML parser — a tiny
     # awk regex against `port: <n>` under the `hub:` block is fine.
     local cfg
-    for cfg in "$HOME/.config/luxsecurityhub/config.yml" "/etc/lux-security-hub/config.yml"; do
+    for cfg in "$HOME/.config/securityluxhub/config.yml" "/etc/security-lux-hub/config.yml" "$HOME/.config/luxsecurityhub/config.yml" "/etc/lux-security-hub/config.yml"; do
         if [[ -r "$cfg" ]]; then
             local port
             port=$(awk '
@@ -135,7 +135,7 @@ confirm_default () {
 }
 
 run_preflight_existing_hub_checks () {
-    if [[ -n "${LUX_PREFLIGHT_DONE:-}" ]]; then return 0; fi
+    if [[ -n "${SECURITY_LUX_PREFLIGHT_DONE:-}" ]]; then return 0; fi
 
     # 1. localhost probe — re-install case
     local local_port; local_port=$(guess_existing_hub_port)
@@ -146,21 +146,21 @@ run_preflight_existing_hub_checks () {
 ==============================================================
  Existing hub detected on this machine
 ==============================================================
-A LuxSecurityHub is already running at $local_url/.
+A SecurityLuxHub is already running at $local_url/.
 This looks like a re-install — which is the right move for almost
 every problem you might be having:
 
   * The installer is idempotent. Re-running it rewrites the systemd
     unit / LaunchAgent and restarts the service.
-  * Your existing config (~/.config/luxsecurityhub/config.yml or
-    /etc/lux-security-hub/config.yml) is left untouched, so your
+  * Your existing config (~/.config/securityluxhub/config.yml or
+    /etc/security-lux-hub/config.yml) is left untouched, so your
     customizations survive.
   * The events database and recorded clips are preserved.
 
 If the hub is misbehaving, before re-installing it's worth peeking at
 the logs first:
-    Linux:  journalctl -fu lux-security-hub
-    macOS:  tail -f ~/Library/Logs/LuxSecurityHub.err.log
+    Linux:  journalctl -fu security-lux-hub
+    macOS:  tail -f ~/Library/Logs/SecurityLuxHub.err.log
 
 EOF
         if ! confirm_default "Continue with re-install? [Y/n]" "Y"; then
@@ -181,7 +181,7 @@ EOF
         if probe_hub "$remote_url"; then
             cat <<EOF
 
-Confirmed: a LuxSecurityHub is responding at $remote_url
+Confirmed: a SecurityLuxHub is responding at $remote_url
 
 You're about to install a SECOND hub on this network. Three reasons
 people end up doing this — pick the one that fits, then decide.
@@ -191,8 +191,8 @@ people end up doing this — pick the one that fits, then decide.
     this new host:
         sudoedit /etc/camera-node/config.yml
     Set 'hub.url' to ws://<this-host>:5000. Then stop the old hub:
-        ssh user@old-host 'sudo systemctl disable --now lux-security-hub'   # Linux
-        ssh user@old-host 'launchctl unload ~/Library/LaunchAgents/com.luxsecurityhub.plist'   # macOS
+        ssh user@old-host 'sudo systemctl disable --now security-lux-hub'   # Linux
+        ssh user@old-host 'launchctl unload ~/Library/LaunchAgents/com.securityluxhub.plist'   # macOS
     Don't forget to also update your MagicMirror module's hubUrl, if
     you use it.
 
@@ -200,10 +200,10 @@ people end up doing this — pick the one that fits, then decide.
     Stop. The hub installer is idempotent — re-running it on the old
     machine almost always fixes things. Most "broken hub" symptoms
     are config-related, not install-corruption. Try:
-        ssh user@old-host 'cd ~/LuxSecurityCamera && git pull && ./hub/install.sh'
+        ssh user@old-host 'cd ~/SecurityLux && git pull && ./hub/install.sh'
     Check logs first if it's still broken:
-        ssh user@old-host 'journalctl -fu lux-security-hub'   # Linux
-        ssh user@old-host 'tail -f ~/Library/Logs/LuxSecurityHub.err.log'   # macOS
+        ssh user@old-host 'journalctl -fu security-lux-hub'   # Linux
+        ssh user@old-host 'tail -f ~/Library/Logs/SecurityLuxHub.err.log'   # macOS
 
   ▸ Running BOTH intentionally:
     Technically supported. Each camera_node connects to exactly one
@@ -221,7 +221,7 @@ EOF
         fi
     fi
 
-    export LUX_PREFLIGHT_DONE=1
+    export SECURITY_LUX_PREFLIGHT_DONE=1
 }
 
 run_preflight_existing_hub_checks
@@ -252,7 +252,7 @@ install_linux () {
 
     cat <<EOF
 ==============================================
- LuxSecurityHub — installer (Linux / systemd)
+ SecurityLuxHub — installer (Linux / systemd)
 ----------------------------------------------
  Install dir:  $INSTALL_DIR
  Service user: $target_user ($target_group)
@@ -271,10 +271,17 @@ EOF
         echo
     fi
 
-    local cfg_dir=/etc/lux-security-hub
+    local cfg_dir=/etc/security-lux-hub
     local cfg_file="$cfg_dir/config.yml"
+    local legacy_cfg_file=/etc/lux-security-hub/config.yml
     if [[ -f "$cfg_file" ]]; then
         echo "==> Existing config at $cfg_file — left untouched."
+    elif [[ -f "$legacy_cfg_file" ]]; then
+        echo "==> Migrating config from $legacy_cfg_file to $cfg_file..."
+        mkdir -p "$cfg_dir"
+        cp "$legacy_cfg_file" "$cfg_file"
+        chmod 644 "$cfg_file"
+        echo "    Edit later with:  sudoedit $cfg_file"
     else
         echo "==> Bootstrapping $cfg_file from config.example.yml..."
         mkdir -p "$cfg_dir"
@@ -283,12 +290,12 @@ EOF
         echo "    Edit later with:  sudoedit $cfg_file"
     fi
 
-    local service_file=/etc/systemd/system/lux-security-hub.service
+    local service_file=/etc/systemd/system/security-lux-hub.service
     echo "==> Writing systemd unit to $service_file..."
     cat > "$service_file" <<EOF
 [Unit]
-Description=LuxSecurityHub — camera + detection + recording hub
-Documentation=https://github.com/JaredLodwick/DoorCamera
+Description=SecurityLuxHub — camera + detection + recording hub
+Documentation=https://github.com/JaredLodwick/SecurityLux
 After=network-online.target
 Wants=network-online.target
 
@@ -298,7 +305,7 @@ User=$target_user
 Group=$target_group
 WorkingDirectory=$INSTALL_DIR
 ExecStart=$NODE_BIN $INSTALL_DIR/src/hub.js
-Environment=LUXHUB_CONFIG=$cfg_file
+Environment=SECURITY_LUX_HUB_CONFIG=$cfg_file
 Restart=on-failure
 RestartSec=3
 NoNewPrivileges=true
@@ -311,35 +318,40 @@ StandardError=journal
 WantedBy=multi-user.target
 EOF
 
-    echo "==> Reloading systemd and (re)starting lux-security-hub.service..."
+    if systemctl list-unit-files --type=service --no-legend lux-security-hub.service 2>/dev/null | grep -q '^lux-security-hub\.service'; then
+        echo "==> Disabling legacy lux-security-hub.service..."
+        systemctl disable --now lux-security-hub 2>/dev/null || true
+    fi
+
+    echo "==> Reloading systemd and (re)starting security-lux-hub.service..."
     systemctl daemon-reload
-    systemctl enable -q lux-security-hub
-    systemctl restart lux-security-hub
+    systemctl enable -q security-lux-hub
+    systemctl restart security-lux-hub
 
     sleep 3
     echo
-    if systemctl is-active --quiet lux-security-hub; then
-        echo "[OK] lux-security-hub.service is running."
+    if systemctl is-active --quiet security-lux-hub; then
+        echo "[OK] security-lux-hub.service is running."
         echo
-        systemctl status lux-security-hub --no-pager --lines=5 || true
+        systemctl status security-lux-hub --no-pager --lines=5 || true
         echo
         cat <<EOF
 ----------------------------------------------
  Useful commands
 ----------------------------------------------
- Live logs:        journalctl -fu lux-security-hub
- Recent logs:      journalctl -u lux-security-hub -n 100 --no-pager
- Service status:   systemctl status lux-security-hub
- Restart:          sudo systemctl restart lux-security-hub
- Stop / disable:   sudo systemctl disable --now lux-security-hub
+ Live logs:        journalctl -fu security-lux-hub
+ Recent logs:      journalctl -u security-lux-hub -n 100 --no-pager
+ Service status:   systemctl status security-lux-hub
+ Restart:          sudo systemctl restart security-lux-hub
+ Stop / disable:   sudo systemctl disable --now security-lux-hub
  Edit config:      sudoedit $cfg_file   (then restart)
 
  Dashboard:        http://$(hostname).local:5000/
  Health check:     curl http://localhost:5000/healthz
 EOF
     else
-        echo "[FAIL] lux-security-hub.service is not running. Recent logs:" >&2
-        journalctl -u lux-security-hub -n 50 --no-pager >&2
+        echo "[FAIL] security-lux-hub.service is not running. Recent logs:" >&2
+        journalctl -u security-lux-hub -n 50 --no-pager >&2
         exit 1
     fi
 }
@@ -357,20 +369,23 @@ install_macos () {
 
     local target_user; target_user=$(id -un)
     local target_home; target_home="$HOME"
-    local plist_label="com.luxsecurityhub"
+    local plist_label="com.securityluxhub"
+    local legacy_plist_label="com.luxsecurityhub"
     local plist_dir="$target_home/Library/LaunchAgents"
     local plist_path="$plist_dir/$plist_label.plist"
+    local legacy_plist_path="$plist_dir/$legacy_plist_label.plist"
 
     # User-level config and logs — no sudo needed for any of this.
-    local cfg_dir="$target_home/.config/luxsecurityhub"
+    local cfg_dir="$target_home/.config/securityluxhub"
     local cfg_file="$cfg_dir/config.yml"
+    local legacy_cfg_file="$target_home/.config/luxsecurityhub/config.yml"
     local log_dir="$target_home/Library/Logs"
-    local log_out="$log_dir/LuxSecurityHub.log"
-    local log_err="$log_dir/LuxSecurityHub.err.log"
+    local log_out="$log_dir/SecurityLuxHub.log"
+    local log_err="$log_dir/SecurityLuxHub.err.log"
 
     cat <<EOF
 ==============================================
- LuxSecurityHub — installer (macOS / launchd)
+ SecurityLuxHub — installer (macOS / launchd)
 ----------------------------------------------
  Install dir:  $INSTALL_DIR
  Service user: $target_user (LaunchAgent — user level)
@@ -393,6 +408,12 @@ EOF
 
     if [[ -f "$cfg_file" ]]; then
         echo "==> Existing config at $cfg_file — left untouched."
+    elif [[ -f "$legacy_cfg_file" ]]; then
+        echo "==> Migrating config from $legacy_cfg_file to $cfg_file..."
+        mkdir -p "$cfg_dir"
+        cp "$legacy_cfg_file" "$cfg_file"
+        chmod 644 "$cfg_file"
+        echo "    Edit later with your editor of choice."
     else
         echo "==> Bootstrapping $cfg_file from config.example.yml..."
         mkdir -p "$cfg_dir"
@@ -408,6 +429,10 @@ EOF
     if launchctl list | awk '{print $3}' | grep -qx "$plist_label"; then
         echo "==> Unloading existing LaunchAgent..."
         launchctl unload "$plist_path" 2>/dev/null || true
+    fi
+    if launchctl list | awk '{print $3}' | grep -qx "$legacy_plist_label"; then
+        echo "==> Unloading legacy LaunchAgent..."
+        launchctl remove "$legacy_plist_label" 2>/dev/null || launchctl unload "$legacy_plist_path" 2>/dev/null || true
     fi
 
     echo "==> Writing LaunchAgent plist to $plist_path..."
@@ -433,7 +458,7 @@ EOF
 
     <key>EnvironmentVariables</key>
     <dict>
-        <key>LUXHUB_CONFIG</key>
+        <key>SECURITY_LUX_HUB_CONFIG</key>
         <string>$cfg_file</string>
         <key>PATH</key>
         <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>

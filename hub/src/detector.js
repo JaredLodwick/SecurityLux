@@ -23,7 +23,7 @@ const { URL } = require("node:url");
 
 const { expandHome } = require("./store");
 
-const DEFAULT_MODEL_DIR = "~/.luxsecurityhub/models";
+const DEFAULT_MODEL_DIR = "~/.securityluxhub/models";
 const WORKER_RESTART_MAX = 3;
 const WORKER_RESTART_WINDOW_MS = 60_000;
 const STALE_FRAME_MS = 5_000;
@@ -32,7 +32,7 @@ const LATENCY_LOG_INTERVAL_MS = 60_000;
 class Detector {
     /**
      * @param {object} opts
-     * @param {object} opts.detectionCfg   Module's `detection` config block.
+     * @param {object} opts.detectionCfg   Hub `detection` config block.
      * @param {Function} opts.onObservation `(observation) => void` where
      *   `observation = { camId, hasPerson, confidence, cls, bbox, frameSeq, ts }`
      *   and `bbox` is normalized 0-1 cx/cy/w/h (or null when no person).

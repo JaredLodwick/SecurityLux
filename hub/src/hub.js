@@ -2,14 +2,14 @@
 "use strict";
 
 /**
- * LuxSecurityHub entry point.
+ * SecurityLuxHub entry point.
  *
  * Resolves the config file by checking, in order:
  *   1. CLI arg:    `node src/hub.js /path/to/config.yml`
- *   2. Env var:    $LUXHUB_CONFIG
+ *   2. Env var:    $SECURITY_LUX_HUB_CONFIG
  *   3. Default search path (first one that exists):
- *        ~/.config/luxsecurityhub/config.yml   (user-level; macOS, Linux, …)
- *        /etc/lux-security-hub/config.yml      (system-level; Linux/systemd)
+ *        ~/.config/securityluxhub/config.yml   (user-level; macOS, Linux, …)
+ *        /etc/security-lux-hub/config.yml      (system-level; Linux/systemd)
  *
  * Falls through to built-in defaults (see `config.example.yml`) if no file
  * is found — useful for `node src/hub.js` smoke tests on a dev box.
@@ -24,8 +24,8 @@ const log = require("./log");
 const { HubServer } = require("./server");
 
 const DEFAULT_CONFIG_PATHS = [
-    path.join(os.homedir(), ".config", "luxsecurityhub", "config.yml"),
-    "/etc/lux-security-hub/config.yml"
+    path.join(os.homedir(), ".config", "securityluxhub", "config.yml"),
+    "/etc/security-lux-hub/config.yml"
 ];
 
 const DEFAULT_CONFIG = {
@@ -35,7 +35,7 @@ const DEFAULT_CONFIG = {
         fps: 2,
         confidence: 0.45,
         classes: ["person"],
-        modelUrl: "https://github.com/JaredLodwick/DoorCamera/releases/download/models-v1/yolov8n-int8.onnx",
+        modelUrl: "https://github.com/JaredLodwick/SecurityLux/releases/download/models-v1/yolov8n-int8.onnx",
         modelSha256: ""
     },
     recording: {
@@ -47,8 +47,8 @@ const DEFAULT_CONFIG = {
         retentionDays: 14
     },
     storage: {
-        clipsRoot: "~/Videos/SecurityCamera",
-        dbPath: "~/.luxsecurityhub/events.db"
+        clipsRoot: "~/Videos/SecurityLux",
+        dbPath: "~/.securityluxhub/events.db"
     },
     logging: { level: "info" }
 };
@@ -69,7 +69,7 @@ function deepMerge(base, overlay) {
 
 function resolveConfigPath() {
     if (process.argv[2]) return process.argv[2];
-    if (process.env.LUXHUB_CONFIG) return process.env.LUXHUB_CONFIG;
+    if (process.env.SECURITY_LUX_HUB_CONFIG) return process.env.SECURITY_LUX_HUB_CONFIG;
     for (const candidate of DEFAULT_CONFIG_PATHS) {
         if (fs.existsSync(candidate)) return candidate;
     }

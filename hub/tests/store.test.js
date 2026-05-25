@@ -18,7 +18,7 @@ const path = require("node:path");
 const { Store } = require("../src/store");
 
 function tmpDb() {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "luxhub-store-"));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "securityluxhub-store-"));
     return { path: path.join(dir, "events.db"), dir };
 }
 

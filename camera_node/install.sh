@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# LuxSecurity camera_node installer.
+# SecurityLux camera_node installer.
 #
 # What it does (idempotent — safe to re-run for upgrades):
 #   1. Sanity-checks: Linux + systemd
@@ -12,7 +12,7 @@
 #   8. Verifies the service came up; prints next steps
 #
 # Usage (from the cloned repo on the camera Pi):
-#     ./pi_client/install.sh
+#     ./camera_node/install.sh
 # It will re-exec itself under sudo if you didn't start it that way.
 
 set -euo pipefail
@@ -43,7 +43,7 @@ fi
 TARGET_USER="${SUDO_USER:-}"
 if [[ -z "$TARGET_USER" || "$TARGET_USER" == "root" ]]; then
     echo "ERROR: must be invoked via sudo from a regular user account." >&2
-    echo "Try: ./pi_client/install.sh   (don't sudo it directly as root)" >&2
+    echo "Try: ./camera_node/install.sh   (don't sudo it directly as root)" >&2
     exit 1
 fi
 TARGET_GROUP=$(id -gn "$TARGET_USER")
@@ -54,7 +54,7 @@ INSTALL_DIR="$SCRIPT_DIR"
 VENV_DIR="$INSTALL_DIR/.venv"
 
 if [[ ! -f "$INSTALL_DIR/requirements.txt" ]]; then
-    echo "ERROR: $INSTALL_DIR doesn't look like a pi_client checkout (no requirements.txt)" >&2
+    echo "ERROR: $INSTALL_DIR doesn't look like a camera_node checkout (no requirements.txt)" >&2
     exit 1
 fi
 
@@ -69,7 +69,7 @@ fi
 
 cat <<EOF
 ==============================================
- LuxSecurity camera_node installer
+ SecurityLux camera_node installer
 ----------------------------------------------
  Install dir:  $INSTALL_DIR
  Service user: $TARGET_USER ($TARGET_GROUP)
@@ -138,8 +138,8 @@ SERVICE_FILE=/etc/systemd/system/camera-node.service
 echo "==> Writing systemd unit to $SERVICE_FILE..."
 cat > "$SERVICE_FILE" <<EOF
 [Unit]
-Description=LuxSecurity camera_node — WebSocket publisher to the LuxSecurityHub 
-Documentation=https://github.com/JaredLodwick/DoorCamera
+Description=SecurityLux camera_node — WebSocket publisher to the SecurityLuxHub
+Documentation=https://github.com/JaredLodwick/SecurityLux
 After=network-online.target
 Wants=network-online.target
 

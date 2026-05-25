@@ -17,7 +17,7 @@ python3-pip
 # Camera diagnostics — lets you inspect /dev/video* from the shell
 v4l-utils
 
-# mDNS so the Pi is reachable at doorcam.local
+# mDNS so the Pi is reachable at securitylux-cam.local
 avahi-daemon
 
 # Numerical library numpy links against at runtime. Without this you get:
