@@ -5,3 +5,14 @@ Pillow==10.*
 PyYAML==6.*
 psutil==5.*
 pytest==8.*
+
+# --- Optional: NeoPixel door light -------------------------------------------
+# Only needed if you wire a WS281x strip to the camera Pi. camera_node imports
+# these behind a guard and degrades to a no-op when they're absent, so leaving
+# them out costs nothing but the light.
+#
+# These are ARM/Raspberry-Pi-only wheels — they will not install on a dev
+# laptop, which is why they live in a separate file rather than here. Install
+# them on the Pi with:
+#
+#     pip install -r requirements-led.txt

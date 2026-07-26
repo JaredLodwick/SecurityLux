@@ -33,6 +33,29 @@ pisugar:
   # Seconds to wait for any PiSugar socket response before giving up.
   timeout_seconds: 1.0
 
+led:
+  # Optional WS281x / NeoPixel strip that lights up when someone is at the door.
+  #
+  # Wiring (SPI — no root required, no conflict with onboard audio):
+  #   DIN  -> GPIO10 / MOSI, physical pin 19
+  #   GND  -> any Pi GND, e.g. physical pin 6   <- a common ground is mandatory
+  #   5V   -> 5V supply
+  #
+  # Enable SPI first:  sudo raspi-config > Interface Options > SPI > Yes
+  # Then add this to /boot/firmware/config.txt so CPU scaling can't drift the
+  # SPI clock and corrupt WS2812 timing:
+  #   core_freq_min=500
+  #
+  # POWER: eight LEDs at full white draw ~480 mA. That is more than the Pi
+  # Zero's 5V rail wants to give while a PiSugar is charging. Keep brightness
+  # capped, or feed the strip from its own 5V supply with a shared ground.
+  #
+  # These values only apply until the hub connects — it then pushes the
+  # authoritative settings, which you edit per camera in the web UI.
+  enabled: false
+  count: 8
+  max_brightness: 0.4
+
 logging:
   # Standard Python logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL.
   level: INFO
