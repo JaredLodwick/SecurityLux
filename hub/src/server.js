@@ -3,53 +3,69 @@
 /**
  * SecurityLuxHub — HTTP + WebSocket server.
  *
- * Camera nodes connect over WS at  ws://<host>:<port>/cam/<cam_id>
- * and push binary JPEG frames; the hub buffers the latest frame per camera,
- * drives optional on-host person detection (worker_threads + onnxruntime),
- * records per-event clips through ffmpeg, and exposes everything else over
- * HTTP for browsers / scripts / other consumers.
+ * Camera nodes connect over WS at `ws://<host>:<port>/cam/<cam_id>` and push
+ * binary JPEG frames. The hub buffers the last few seconds per camera, re-fans
+ * the newest frame as MJPEG to any number of HTTP viewers, drives optional
+ * on-host person detection, records per-event clips through ffmpeg, and exposes
+ * the rest over HTTP.
  *
- * Earlier versions lived inside MagicMirror as a NodeHelper. The split into
- * a standalone hub means dropping three MagicMirror-isms:
+ * ============================================================================
+ *  Boot order matters
+ * ============================================================================
  *
- *   - NodeHelper.create({ start, stop, ... }) → plain class instantiated
- *     by `hub.js`. Lifecycle is now `await new HubServer(cfg, log).start()`.
- *   - `Log` from MM's bundle → injected logger (see ./log.js).
- *   - socketNotificationReceived(...) carrying config → config now comes via
- *     constructor args from a YAML file.
+ * The store, settings, and storage manager come up *before* the listener and
+ * regardless of whether detection is enabled. They used to be constructed
+ * inside the detection boot path, which meant a hub with detection off had no
+ * settings table and no way to save anything from the UI.
  *
- * Browsers used to receive live status via socketNotification; with the
- * MM frontend gone, they poll `GET /cam/<id>/status` instead. `pushStatus`
- * is intentionally a no-op kept around so call sites don't need to change.
+ * Detection is the only optional subsystem, and its failure is contained: a
+ * missing model or a broken native module leaves frames, streaming, storage,
+ * and the dashboard fully working.
  */
 
 const http = require("node:http");
-const url = require("node:url");
-const fs = require("node:fs");
-const path = require("node:path");
 const WebSocketServer = require("ws").Server;
 
 const { Store, expandHome } = require("./store");
+const { SettingsService } = require("./settings");
+const { StorageManager } = require("./storage");
 const { Detector } = require("./detector");
 const { Recorder } = require("./recorder");
 const { SessionManager } = require("./session");
+const { FrameBuffer } = require("./framebuffer");
+const { Recognizer } = require("./recognize");
+const { buildLedCommand, refreshIntervalFor, DEFAULT_TTL_MS } = require("./led");
+const { matchRoute } = require("./routes");
+const media = require("./media");
+const eventLog = require("./event-log");
+const enrollment = require("./enrollment");
+const { sendError } = require("./http-util");
 
-const MJPEG_BOUNDARY = "frame";
 const STATUS_STALE_MS = 30_000;
-const RETENTION_INTERVAL_MS = 6 * 60 * 60 * 1000;   // 6h
-const DETECTION_FRESH_MS = 1500;                    // overlay disappears after this
+const DETECTION_FRESH_MS = 1500;
+const OFFLINE_CHECK_MS = 60_000;
+const LED_TICK_MS = 2000;
+
+/**
+ * Below this the clock is obviously wrong (it's before this code was written),
+ * which means NTP hasn't synced since boot. A Pi with no RTC comes up in 1970,
+ * and events written then sort to the beginning of time forever and are
+ * effectively unfindable. Refusing to write is better than corrupting the log.
+ */
+const MIN_SANE_CLOCK_MS = Date.UTC(2024, 0, 1);
 
 class HubServer {
     constructor (cfg, log) {
         this.cfg = cfg || {};
         this.log = log || console;
 
-        this.hubPort = (cfg.hub && cfg.hub.port) || 5000;
+        // `??` not `||`: port 0 is a legitimate request for an ephemeral port,
+        // and `0 || 5000` would silently bind 5000 instead.
+        this.hubPort = (cfg.hub && cfg.hub.port) ?? 5000;
         this.bindAddr = (cfg.hub && cfg.hub.bindAddr) || "0.0.0.0";
 
-        this.detectionCfg = cfg.detection || { enabled: false };
-        this.recordingCfg = cfg.recording || {};
-        this.clipsRoot = (cfg.storage && cfg.storage.clipsRoot) || "~/Videos/SecurityLux";
+        this.detectionCfg = cfg.detection || {};
+        this.clipsRoot = expandHome((cfg.storage && cfg.storage.clipsRoot) || "~/Videos/SecurityLux");
         this.dbPath = (cfg.storage && cfg.storage.dbPath) || "~/.securityluxhub/events.db";
 
         this.cams = new Map();
@@ -57,19 +73,41 @@ class HubServer {
         this.wss = null;
 
         this.store = null;
+        this.settings = null;
+        this.storage = null;
         this.detector = null;
         this.sessionManager = null;
-        this.retentionTimer = null;
-        this.detectionEnabled = false;     // runtime state (POST /detection)
-        this.detectionError = null;        // last boot failure, surfaced via API
+        this.recognizer = null;
+
+        this.detectionEnabled = false;
+        this.detectionError = null;
+        this.storeError = null;
+
+        this._zoneCache = new Map();
+        this._ledState = new Map();       // camId -> { stage, sentAt, ttlMs }
+        this._offlineTimer = null;
+        this._ledTimer = null;
+        this._clockWarned = false;
     }
 
+    // ==================================================================
+    //  Lifecycle
+    // ==================================================================
+
     async start () {
+        this._openStore();
+
         this.server = http.createServer((req, res) => this.handleHttp(req, res));
         this.wss = new WebSocketServer({ noServer: true });
 
         this.server.on("upgrade", (req, socket, head) => {
-            const { pathname } = url.parse(req.url);
+            let pathname;
+            try {
+                pathname = new URL(req.url, "http://localhost").pathname;
+            } catch (_) {
+                socket.destroy();
+                return;
+            }
             const m = pathname && pathname.match(/^\/cam\/([^/]+)$/);
             if (!m) {
                 socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
@@ -91,11 +129,11 @@ class HubServer {
             });
         });
 
-        // Optional detection boot. Failure here doesn't block the camera
-        // pipeline — the rest of the hub continues serving frames + the
-        // dashboard. Runtime POST /detection can retry.
-        if (this.detectionCfg && this.detectionCfg.enabled) {
-            this._bootDetection().then((r) => {
+        this._startOfflineMonitor();
+        this._startLedRefresh();
+
+        if (this.detectionCfg.enabled) {
+            this.bootDetection().then((r) => {
                 if (!r.ok) this.log.warn(`initial detection boot failed: ${r.error}`);
             }).catch((err) => {
                 this.log.error(`detection boot exception: ${err && err.message}`);
@@ -105,11 +143,67 @@ class HubServer {
         }
     }
 
-    async stop () {
-        if (this.retentionTimer) {
-            clearInterval(this.retentionTimer);
-            this.retentionTimer = null;
+    /**
+     * Store, settings, storage, recognizer — the always-on core.
+     * A failure here is recorded and surfaced through the API rather than
+     * thrown, so the hub still serves live video with a broken database.
+     */
+    _openStore () {
+        try {
+            this.store = new Store({ dbPath: this.dbPath, logger: this.log }).open();
+        } catch (err) {
+            this.storeError = `event store unavailable: ${err && err.message}`;
+            this.log.error(this.storeError);
+            this.store = null;
+            return;
         }
+
+        this.settings = new SettingsService({
+            store: this.store,
+            fileCfg: this.cfg,
+            logger: this.log
+        });
+
+        this.storage = new StorageManager({
+            store: this.store,
+            settings: this.settings,
+            clipsRoot: this.clipsRoot,
+            dbPath: this.dbPath,
+            logger: this.log
+        });
+        this.storage.start();
+
+        this.recognizer = new Recognizer({ store: this.store, enabled: false, logger: this.log });
+
+        this.sessionManager = new SessionManager({
+            store: this.store,
+            settings: this.settings,
+            clipsRoot: this.clipsRoot,
+            storage: this.storage,
+            recorderFactory: (cam, opts) => new Recorder({ cam, ...opts }),
+            getCam: (camId) => this.getCam(camId),
+            getZones: (camId) => this.zonesFor(camId),
+            onBehaviorChange: (camId, state) => this._onBehaviorChange(camId, state),
+            onEventFinalized: (event) => this._onEventFinalized(event),
+            logger: this.log
+        });
+
+        this.settings.subscribe((changed) => this._onSettingsChanged(changed));
+    }
+
+    async stop () {
+        for (const timer of [this._offlineTimer, this._ledTimer]) {
+            if (timer) clearInterval(timer);
+        }
+        this._offlineTimer = null;
+        this._ledTimer = null;
+
+        // Turn every door light off on the way out rather than leaving whatever
+        // stage was last set burning on someone's porch.
+        for (const camId of this.cams.keys()) {
+            this.sendLedCommand(camId, 0, { ttlMs: 0 });
+        }
+
         if (this.sessionManager) {
             try { await this.sessionManager.forceEndAll("hub-stop"); } catch (_) { /* ignore */ }
         }
@@ -117,6 +211,7 @@ class HubServer {
             try { await this.detector.stop(); } catch (_) { /* ignore */ }
             this.detector = null;
         }
+        if (this.storage) { this.storage.stop(); this.storage = null; }
         if (this.store) {
             try { this.store.close(); } catch (_) { /* ignore */ }
             this.store = null;
@@ -134,13 +229,18 @@ class HubServer {
         }
     }
 
+    // ==================================================================
+    //  Camera records
+    // ==================================================================
+
     getCam (camId) {
         let cam = this.cams.get(camId);
         if (!cam) {
+            const fps = this.settings ? this.settings.get("recording.fps", camId) : 15;
+            const preRoll = this.settings ? this.settings.get("recording.preRollSeconds", camId) : 5;
             cam = {
                 id: camId,
                 desiredState: "on",
-                detectionEnabled: true,        // per-cam runtime flag; toggled via POST /cam/<id>/detection
                 lastJpeg: null,
                 lastJpegAt: 0,
                 status: null,
@@ -149,139 +249,15 @@ class HubServer {
                 lastSeenAt: 0,
                 frameSeq: 0,
                 lastDetection: null,
-                lastDetectionAt: 0
+                lastDetectionAt: 0,
+                connectedAt: 0,
+                reconnects: 0,
+                offlineSince: 0,
+                frameBuffer: new FrameBuffer({ seconds: preRoll, fps })
             };
             this.cams.set(camId, cam);
         }
         return cam;
-    }
-
-    /**
-     * Idempotent: brings the detection subsystem up (store + detector +
-     * session manager). Returns { ok, error } so callers — config-driven
-     * boot OR runtime POST /detection — can surface failures to the user.
-     * The store stays open across stop/start so historical events remain
-     * queryable when detection is paused.
-     */
-    async _bootDetection () {
-        if (this.detector && this.sessionManager && this.store) {
-            this.detectionEnabled = true;
-            this.detectionError = null;
-            return { ok: true };
-        }
-
-        if (!this.store) {
-            try {
-                this.store = new Store({ dbPath: this.dbPath, logger: this.log }).open();
-            } catch (err) {
-                const msg = `event store unavailable: ${err && err.message}`;
-                this.log.error(msg);
-                this.detectionError = msg;
-                this.store = null;
-                return { ok: false, error: msg };
-            }
-        }
-
-        if (!this.sessionManager) {
-            this.sessionManager = new SessionManager({
-                store: this.store,
-                recordingCfg: this.recordingCfg || {},
-                clipsRoot: this.clipsRoot,
-                recorderFactory: (cam, opts) => new Recorder({ cam, ...opts }),
-                getCam: (camId) => this.getCam(camId),
-                logger: this.log
-            });
-        }
-
-        if (!this.detector) {
-            this.detector = new Detector({
-                detectionCfg: this.detectionCfg || {},
-                onObservation: (obs) => this._onDetection(obs),
-                logger: this.log
-            });
-            const result = await this.detector.start();
-            if (!result.ok) {
-                this.detectionError = result.error;
-                this.detector = null;
-                return { ok: false, error: result.error };
-            }
-            for (const cam of this.cams.values()) {
-                this.detector.attachCam(cam);
-            }
-        }
-
-        this._scheduleRetentionSweep();
-        this.detectionEnabled = true;
-        this.detectionError = null;
-        return { ok: true };
-    }
-
-    async _stopDetection (reason) {
-        if (this.sessionManager) {
-            try { await this.sessionManager.forceEndAll(reason || "runtime-disable"); }
-            catch (_) { /* logged inside */ }
-        }
-        if (this.detector) {
-            try { await this.detector.stop(); } catch (_) { /* ignore */ }
-            this.detector = null;
-        }
-        this.detectionEnabled = false;
-        // Note: store and sessionManager kept around — store stays queryable
-        // for historical events; sessionManager will get a fresh detector if
-        // detection is re-enabled.
-    }
-
-    _detectionStatus () {
-        return {
-            enabled: !!(this.detector && this.sessionManager && this.store),
-            available: !!this.store,
-            error: this.detectionError || null
-        };
-    }
-
-    _onDetection (obs) {
-        if (!obs || !obs.camId) return;
-        const cam = this.getCam(obs.camId);
-        // Per-cam detection mute: don't update lastDetection (no bbox overlay)
-        // and don't feed observations to the session manager (no clip
-        // recording). The detector also short-circuits earlier on this flag,
-        // so this is belt-and-suspenders.
-        if (cam.detectionEnabled === false) return;
-        if (obs.hasPerson) {
-            cam.lastDetection = {
-                class: obs.cls || "person",
-                confidence: obs.confidence,
-                bbox: obs.bbox || null
-            };
-            cam.lastDetectionAt = obs.ts || Date.now();
-        }
-        if (this.sessionManager) {
-            this.sessionManager.observe(obs.camId, obs.hasPerson, obs.confidence);
-        }
-        // No pushStatus needed — browsers (the dashboard + the MM module)
-        // poll GET /cam/<id>/status. Live status latency is bounded by the
-        // poll interval (default 500ms).
-    }
-
-    _scheduleRetentionSweep () {
-        if (this.retentionTimer) return;
-        const sweep = () => {
-            if (!this.store) return;
-            try {
-                const result = this.store.retentionSweep({
-                    retentionDays: (this.recordingCfg || {}).retentionDays,
-                    clipsRoot: this.clipsRoot
-                });
-                if (result.rowsDeleted || result.clipsDeleted) {
-                    this.log.info(`retention sweep: removed ${result.rowsDeleted} rows, ${result.clipsDeleted} clips`);
-                }
-            } catch (err) {
-                this.log.warn(`retention sweep failed: ${err && err.message}`);
-            }
-        };
-        setTimeout(sweep, 30_000);
-        this.retentionTimer = setInterval(sweep, RETENTION_INTERVAL_MS);
-        if (typeof this.retentionTimer.unref === "function") this.retentionTimer.unref();
     }
 
     onCamSocket (camId, ws) {
@@ -292,9 +268,21 @@ class HubServer {
         cam.ws = ws;
         cam.connected = true;
         cam.lastSeenAt = Date.now();
+        cam.connectedAt = cam.lastSeenAt;
+        cam.offlineSince = 0;
+        cam.reconnects += 1;
         this.log.info(`cam connected: ${camId}`);
 
+        if (this.store) {
+            try { this.store.touchCamera(camId, { connected: true }); } catch (_) { /* non-fatal */ }
+        }
+
         this.sendCommand(cam, { type: "set_state", state: cam.desiredState });
+        this._sendLedConfig(camId);
+        // Re-assert the light so a camera that rebooted mid-event isn't left
+        // dark while someone is still standing there.
+        const led = this._ledState.get(camId);
+        this.sendLedCommand(camId, led ? led.stage : 0, {});
 
         if (this.detector) this.detector.attachCam(cam);
 
@@ -303,17 +291,24 @@ class HubServer {
             const binary = isBinary === true
                 || (isBinary === undefined && Buffer.isBuffer(data));
             if (binary) {
-                cam.lastJpeg = Buffer.isBuffer(data) ? data : Buffer.from(data);
+                const jpeg = Buffer.isBuffer(data) ? data : Buffer.from(data);
+                cam.lastJpeg = jpeg;
                 cam.lastJpegAt = cam.lastSeenAt;
                 cam.frameSeq += 1;
+                cam.frameBuffer.push(jpeg, cam.frameSeq, cam.lastJpegAt);
                 return;
             }
             let msg;
             try { msg = JSON.parse(data.toString("utf8")); } catch (_) { return; }
             if (!msg || typeof msg !== "object") return;
+
             if (msg.type === "hello") {
                 this.sendCommand(cam, { type: "hello_ack", cam_id: camId });
                 this.sendCommand(cam, { type: "set_state", state: cam.desiredState });
+                this._sendLedConfig(camId);
+                if (msg.capabilities && msg.capabilities.fps) {
+                    cam.frameBuffer.setCapacity({ fps: Number(msg.capabilities.fps) });
+                }
             } else if (msg.type === "status") {
                 cam.status = {
                     fps: msg.fps,
@@ -321,20 +316,24 @@ class HubServer {
                     battery_pct: msg.battery_pct,
                     on_battery: msg.on_battery,
                     camera_available: msg.camera_available,
+                    led_available: msg.led_available,
+                    uptime_s: msg.uptime_s,
                     reported_state: msg.state
                 };
             }
         });
 
         const handleClose = () => {
-            if (cam.ws === ws) {
-                cam.ws = null;
-                cam.connected = false;
-                cam.lastJpeg = null;
-                this.log.info(`cam disconnected: ${camId}`);
-                if (this.sessionManager) {
-                    this.sessionManager.forceEnd(camId, "cam-disconnected").catch(() => { /* logged inside */ });
-                }
+            if (cam.ws !== ws) return;
+            cam.ws = null;
+            cam.connected = false;
+            cam.lastJpeg = null;
+            cam.offlineSince = Date.now();
+            cam.frameBuffer.clear();
+            this.log.info(`cam disconnected: ${camId}`);
+            if (this.sessionManager) {
+                this.sessionManager.forceEnd(camId, "cam-disconnected")
+                    .catch(() => { /* logged inside */ });
             }
         };
         ws.on("close", handleClose);
@@ -345,10 +344,25 @@ class HubServer {
     }
 
     sendCommand (cam, msg) {
-        if (!cam.ws || cam.ws.readyState !== cam.ws.OPEN) return;
-        try { cam.ws.send(JSON.stringify(msg)); } catch (err) {
+        if (!cam || !cam.ws || cam.ws.readyState !== cam.ws.OPEN) return false;
+        try {
+            cam.ws.send(JSON.stringify(msg));
+            return true;
+        } catch (err) {
             this.log.warn(`send to ${cam.id} failed: ${err && err.message}`);
+            return false;
         }
+    }
+
+    /** Route-facing wrapper with a useful error when the camera isn't there. */
+    sendCameraCommand (camId, msg) {
+        const cam = this.cams.get(camId);
+        if (!cam || !cam.connected) {
+            return { ok: false, error: `camera "${camId}" is not connected` };
+        }
+        const sent = this.sendCommand(cam, msg);
+        if (sent) this.log.info(`[hub] sent ${msg.type} to ${camId}`);
+        return sent ? { ok: true } : { ok: false, error: "failed to send command" };
     }
 
     setDesiredState (camId, state) {
@@ -356,16 +370,28 @@ class HubServer {
         if (cam.desiredState === state) return;
         cam.desiredState = state;
         this.sendCommand(cam, { type: "set_state", state });
+        if (state === "off") {
+            cam.frameBuffer.clear();
+            this.sendLedCommand(camId, 0, { ttlMs: 0 });
+        }
     }
+
+    // ==================================================================
+    //  Status
+    // ==================================================================
 
     statusFor (camId) {
         const cam = this.getCam(camId);
         const now = Date.now();
         const fresh = cam.connected && (now - cam.lastSeenAt) < STATUS_STALE_MS;
         const reported = cam.status || {};
-        const detectionFresh = cam.lastDetectionAt && (now - cam.lastDetectionAt) < DETECTION_FRESH_MS;
+        const detectionFresh = cam.lastDetectionAt
+            && (now - cam.lastDetectionAt) < DETECTION_FRESH_MS;
+        const behavior = this.sessionManager ? this.sessionManager.behaviorFor(camId) : null;
+
         return {
             cam_id: camId,
+            name: this.settings ? (this.settings.get("events.friendlyName", camId) || camId) : camId,
             state: cam.desiredState,
             connected: cam.connected,
             fresh,
@@ -374,326 +400,347 @@ class HubServer {
             battery_pct: reported.battery_pct ?? null,
             on_battery: reported.on_battery ?? null,
             camera_available: reported.camera_available ?? null,
+            led_available: reported.led_available ?? null,
+            uptime_s: reported.uptime_s ?? null,
             last_frame_age_ms: cam.lastJpegAt ? now - cam.lastJpegAt : null,
             current_detection: detectionFresh ? cam.lastDetection : null,
-            detection_enabled: cam.detectionEnabled !== false
+            detection_enabled: this.settings ? this.settings.get("detection.enabled", camId) : true,
+            recording_enabled: this.settings ? this.settings.get("recording.enabled", camId) : true,
+            recording_paused: this.storage ? this.storage.recordingPaused : false,
+            behavior: behavior ? behavior.behavior : "idle",
+            led_stage: behavior ? behavior.stage : 0,
+            person_count: behavior ? behavior.personCount : 0,
+            session_active: this.sessionManager ? this.sessionManager.isActive(camId) : false,
+            connected_at: cam.connectedAt || null,
+            reconnects: cam.reconnects
         };
     }
 
-    handleHttp (req, res) {
-        const parsed = url.parse(req.url, true);
-        const pathname = parsed.pathname || "/";
-
-        res.setHeader("Access-Control-Allow-Origin", "*");
-        res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-        res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-        if (req.method === "OPTIONS") { res.writeHead(204); res.end(); return; }
-
-        if (pathname === "/healthz") {
-            res.writeHead(200, { "Content-Type": "text/plain" });
-            res.end("ok");
-            return;
-        }
-        if ((pathname === "/" || pathname === "/index.html") && req.method === "GET") {
-            this.serveWebPage(res);
-            return;
-        }
-        if (pathname === "/detection" && req.method === "GET") {
-            res.writeHead(200, { "Content-Type": "application/json" });
-            res.end(JSON.stringify(this._detectionStatus()));
-            return;
-        }
-        if (pathname === "/detection" && req.method === "POST") {
-            this.handleDetectionToggle(req, res);
-            return;
-        }
-        if (pathname === "/cams" && req.method === "GET") {
-            const list = [];
-            for (const id of this.cams.keys()) list.push(this.statusFor(id));
-            res.writeHead(200, { "Content-Type": "application/json" });
-            res.end(JSON.stringify(list));
-            return;
-        }
-
-        const camEventsMatch = pathname.match(/^\/cam\/([^/]+)\/events$/);
-        if (camEventsMatch && req.method === "GET") {
-            this.handleListEvents(decodeURIComponent(camEventsMatch[1]), parsed.query, res);
-            return;
-        }
-
-        const eventMatch = pathname.match(/^\/events\/(\d+)(?:\/clip(?:\.[a-z0-9]+)?)?$/i);
-        if (eventMatch && req.method === "GET") {
-            const eventId = Number(eventMatch[1]);
-            const wantsClip = pathname.includes("/clip");
-            if (wantsClip) {
-                this.serveClip(eventId, req, res);
-            } else {
-                this.handleGetEvent(eventId, res);
-            }
-            return;
-        }
-
-        const camMatch = pathname.match(/^\/cam\/([^/]+)\/(status|toggle|detection|stream\.mjpg)$/);
-        if (camMatch) {
-            const camId = decodeURIComponent(camMatch[1]);
-            const action = camMatch[2];
-            if (action === "status" && req.method === "GET") {
-                res.writeHead(200, { "Content-Type": "application/json" });
-                res.end(JSON.stringify(this.statusFor(camId)));
-                return;
-            }
-            if (action === "toggle" && req.method === "POST") {
-                this.readJsonBody(req, (body) => {
-                    const cam = this.getCam(camId);
-                    let desired;
-                    if (body && (body.state === "on" || body.state === "off")) {
-                        desired = body.state;
-                    } else if (body && body.state !== undefined) {
-                        res.writeHead(400, { "Content-Type": "application/json" });
-                        res.end(JSON.stringify({ error: "state must be 'on' or 'off'" }));
-                        return;
-                    } else {
-                        desired = cam.desiredState === "on" ? "off" : "on";
-                    }
-                    this.setDesiredState(camId, desired);
-                    res.writeHead(200, { "Content-Type": "application/json" });
-                    res.end(JSON.stringify({ state: desired }));
-                });
-                return;
-            }
-            if (action === "detection" && req.method === "POST") {
-                // Per-cam runtime detection mute. Body: { enabled: boolean }.
-                // The global /detection endpoint controls whether the detector
-                // worker runs at all; this endpoint is a finer-grained gate
-                // that just hides one camera's frames from the detector.
-                this.readJsonBody(req, (body) => {
-                    if (!body || typeof body.enabled !== "boolean") {
-                        res.writeHead(400, { "Content-Type": "application/json" });
-                        res.end(JSON.stringify({ error: "body must be { enabled: boolean }" }));
-                        return;
-                    }
-                    const cam = this.getCam(camId);
-                    cam.detectionEnabled = body.enabled;
-                    this.log.info(`per-cam detection ${cam.detectionEnabled ? "enabled" : "disabled"} for ${camId}`);
-                    res.writeHead(200, { "Content-Type": "application/json" });
-                    res.end(JSON.stringify(this.statusFor(camId)));
-                });
-                return;
-            }
-            if (action === "stream.mjpg" && req.method === "GET") {
-                this.serveMjpeg(camId, req, res);
-                return;
-            }
-        }
-
-        res.writeHead(404, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "not found" }));
+    allStatuses () {
+        return [...this.cams.keys()].map((id) => this.statusFor(id));
     }
 
-    readJsonBody (req, cb) {
-        const chunks = [];
-        let total = 0;
-        req.on("data", (c) => {
-            total += c.length;
-            if (total > 16_384) { req.destroy(); return; }
-            chunks.push(c);
-        });
-        req.on("end", () => {
-            if (!chunks.length) { cb(null); return; }
-            try { cb(JSON.parse(Buffer.concat(chunks).toString("utf8"))); }
-            catch (_) { cb(null); }
-        });
-        req.on("error", () => cb(null));
-    }
+    // ==================================================================
+    //  Detection
+    // ==================================================================
 
-    handleDetectionToggle (req, res) {
-        this.readJsonBody(req, async (body) => {
-            if (!body || typeof body.enabled !== "boolean") {
-                res.writeHead(400, { "Content-Type": "application/json" });
-                res.end(JSON.stringify({ error: "body must be { enabled: boolean }" }));
-                return;
-            }
-            let bootResult = { ok: true };
-            if (body.enabled) {
-                bootResult = await this._bootDetection();
-            } else {
-                await this._stopDetection("api-disable");
-            }
-            const status = this._detectionStatus();
-            res.writeHead(bootResult.ok ? 200 : 500, { "Content-Type": "application/json" });
-            res.end(JSON.stringify(status));
-        });
-    }
-
-    serveWebPage (res) {
-        // __dirname is hub/src/, page lives at hub/web/index.html.
-        const filePath = path.join(__dirname, "..", "web", "index.html");
-        fs.readFile(filePath, (err, data) => {
-            if (err) {
-                this.log.warn(`failed to read web/index.html: ${err.message}`);
-                res.writeHead(500, { "Content-Type": "text/plain" });
-                res.end("internal error");
-                return;
-            }
-            res.writeHead(200, {
-                "Content-Type": "text/html; charset=utf-8",
-                "Cache-Control": "no-cache"
-            });
-            res.end(data);
-        });
-    }
-
-    handleListEvents (camId, query, res) {
+    async bootDetection () {
         if (!this.store) {
-            res.writeHead(503, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({
-                error: "events store unavailable",
-                detail: this.detectionError || "detection has never been enabled on this hub"
-            }));
-            return;
+            return { ok: false, error: this.storeError || "event store unavailable" };
         }
-        const sinceMs = query.since !== undefined ? Number(query.since) : undefined;
-        const limit = query.limit !== undefined ? Number(query.limit) : undefined;
-        try {
-            const events = this.store.queryEvents({ camId, sinceMs, limit });
-            res.writeHead(200, { "Content-Type": "application/json" });
-            res.end(JSON.stringify(events));
-        } catch (err) {
-            this.log.warn(`events query failed: ${err && err.message}`);
-            res.writeHead(500, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: "internal error" }));
-        }
-    }
-
-    handleGetEvent (eventId, res) {
-        if (!this.store) {
-            res.writeHead(503, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: "detection not enabled" }));
-            return;
-        }
-        const event = this.store.getEvent(eventId);
-        if (!event) {
-            res.writeHead(404, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: "not found" }));
-            return;
-        }
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify(event));
-    }
-
-    serveClip (eventId, req, res) {
-        if (!this.store) {
-            res.writeHead(503, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: "detection not enabled" }));
-            return;
-        }
-        const event = this.store.getEvent(eventId);
-        if (!event || !event.clip_path) {
-            res.writeHead(404, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: "clip not found" }));
-            return;
-        }
-        const root = expandHome(this.clipsRoot);
-        const abs = path.resolve(root, event.clip_path);
-        if (!abs.startsWith(path.resolve(root) + path.sep)) {
-            res.writeHead(400, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: "invalid path" }));
-            return;
+        if (this.detector) {
+            this.detectionEnabled = true;
+            this.detectionError = null;
+            return { ok: true };
         }
 
-        let stat;
-        try { stat = fs.statSync(abs); }
-        catch (_) {
-            res.writeHead(404, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: "clip file missing" }));
-            return;
-        }
-
-        const contentType = abs.endsWith(".mp4") ? "video/mp4" : "video/x-matroska";
-        const range = req.headers.range;
-        if (range) {
-            const m = /^bytes=(\d*)-(\d*)$/.exec(range);
-            if (!m) {
-                res.writeHead(416, {
-                    "Content-Range": `bytes */${stat.size}`,
-                    "Content-Type": "application/json"
-                });
-                res.end(JSON.stringify({ error: "invalid range" }));
-                return;
-            }
-            const start = m[1] ? Number(m[1]) : 0;
-            const end = m[2] ? Number(m[2]) : stat.size - 1;
-            if (start >= stat.size || end >= stat.size || start > end) {
-                res.writeHead(416, {
-                    "Content-Range": `bytes */${stat.size}`,
-                    "Content-Type": "application/json"
-                });
-                res.end(JSON.stringify({ error: "range not satisfiable" }));
-                return;
-            }
-            res.writeHead(206, {
-                "Content-Type": contentType,
-                "Content-Length": end - start + 1,
-                "Content-Range": `bytes ${start}-${end}/${stat.size}`,
-                "Accept-Ranges": "bytes"
-            });
-            fs.createReadStream(abs, { start, end }).pipe(res);
-            return;
-        }
-
-        res.writeHead(200, {
-            "Content-Type": contentType,
-            "Content-Length": stat.size,
-            "Accept-Ranges": "bytes"
+        this.detector = new Detector({
+            settings: this.settings,
+            detectionCfg: this.detectionCfg,
+            onObservation: (obs) => this._onDetection(obs),
+            isSessionActive: (camId) => this.sessionManager.isActive(camId),
+            logger: this.log
         });
-        fs.createReadStream(abs).pipe(res);
+
+        const result = await this.detector.start();
+        if (!result.ok) {
+            this.detectionError = result.error;
+            this.detector = null;
+            return { ok: false, error: result.error };
+        }
+        for (const cam of this.cams.values()) this.detector.attachCam(cam);
+
+        this.detectionEnabled = true;
+        this.detectionError = null;
+        return { ok: true };
+    }
+
+    async stopDetection (reason) {
+        if (this.sessionManager) {
+            try { await this.sessionManager.forceEndAll(reason || "runtime-disable"); }
+            catch (_) { /* logged inside */ }
+        }
+        if (this.detector) {
+            try { await this.detector.stop(); } catch (_) { /* ignore */ }
+            this.detector = null;
+        }
+        this.detectionEnabled = false;
+    }
+
+    detectionStatus () {
+        return {
+            enabled: !!this.detector,
+            available: !!this.store,
+            error: this.detectionError || this.storeError || null,
+            stats: this.detector ? this.detector.stats() : null,
+            recording_paused: this.storage ? this.storage.recordingPaused : false,
+            paused_reason: this.storage ? this.storage.pausedReason : null,
+            clock_ok: Date.now() >= MIN_SANE_CLOCK_MS
+        };
+    }
+
+    _onDetection (obs) {
+        if (!obs || !obs.camId) return;
+        if (!this.clockIsSane()) return;
+
+        const cam = this.getCam(obs.camId);
+        const detections = obs.detections || [];
+        if (detections.length) {
+            cam.lastDetection = {
+                class: detections[0].cls || "person",
+                confidence: detections[0].confidence,
+                bbox: detections[0].bbox || null,
+                count: detections.length
+            };
+            cam.lastDetectionAt = obs.ts || Date.now();
+        }
+        if (this.sessionManager) this.sessionManager.observe(obs.camId, detections);
+    }
+
+    /**
+     * Guard against writing events with a nonsense timestamp.
+     *
+     * A Pi with no RTC boots at the epoch and stays there until NTP lands. Rows
+     * written in that window sort before everything else forever and are
+     * effectively lost, so we drop detections until the clock looks real and say
+     * so loudly, once.
+     */
+    clockIsSane () {
+        if (Date.now() >= MIN_SANE_CLOCK_MS) return true;
+        if (!this._clockWarned) {
+            this._clockWarned = true;
+            this.log.error(
+                "[hub] system clock is before 2024 — NTP has not synced. " +
+                "Refusing to write events until the clock is correct, otherwise " +
+                "they would be timestamped in the past and unfindable."
+            );
+        }
+        return false;
+    }
+
+    // ==================================================================
+    //  Zones
+    // ==================================================================
+
+    zonesFor (camId) {
+        if (!this.store) return [];
+        if (this._zoneCache.has(camId)) return this._zoneCache.get(camId);
+        let zones = [];
+        try { zones = this.store.listZones(camId); }
+        catch (err) { this.log.warn(`[hub] failed to load zones for ${camId}: ${err.message}`); }
+        this._zoneCache.set(camId, zones);
+        return zones;
+    }
+
+    invalidateZones (camId) {
+        this._zoneCache.delete(camId);
+    }
+
+    // ==================================================================
+    //  Door light
+    // ==================================================================
+
+    _onBehaviorChange (camId, state) {
+        this.sendLedCommand(camId, state.stage, {});
+    }
+
+    /**
+     * Send a stage to a camera's strip, remembering it so the refresh loop can
+     * keep the TTL alive while the stage is held.
+     */
+    sendLedCommand (camId, stage, opts) {
+        const cam = this.cams.get(camId);
+        if (!cam) return { ok: false, error: `unknown camera "${camId}"` };
+        if (!this.settings || !this.settings.get("led.enabled", camId)) {
+            return { ok: false, error: `the door light is not enabled for "${camId}"` };
+        }
+        if (!cam.connected) return { ok: false, error: `camera "${camId}" is not connected` };
+
+        const msg = buildLedCommand(stage, {
+            brightness: this.settings.get("led.brightness", camId),
+            idleGlow: this.settings.get("led.idleGlow", camId),
+            illuminate: this._shouldIlluminate(camId, stage),
+            ttlMs: opts && opts.ttlMs !== undefined ? opts.ttlMs : DEFAULT_TTL_MS,
+            test: opts && opts.test
+        });
+
+        const sent = this.sendCommand(cam, msg);
+        if (sent) {
+            this._ledState.set(camId, { stage, sentAt: Date.now(), ttlMs: msg.ttlMs });
+        }
+        return sent ? { ok: true } : { ok: false, error: "failed to send LED command" };
+    }
+
+    /** Push the camera its LED wiring config so it can init the strip. */
+    _sendLedConfig (camId) {
+        if (!this.settings) return;
+        const cam = this.cams.get(camId);
+        if (!cam) return;
+        this.sendCommand(cam, {
+            type: "led_config",
+            enabled: this.settings.get("led.enabled", camId),
+            count: this.settings.get("led.count", camId),
+            maxBrightness: this.settings.get("led.brightness", camId)
+        });
+    }
+
+    _shouldIlluminate (camId, stage) {
+        if (stage <= 0) return false;
+        if (!this.settings.get("led.illuminateOnEvent", camId)) return false;
+        // eslint-disable-next-line global-require
+        const { isDark } = require("./sun");
+        return isDark(
+            Date.now(),
+            this.settings.get("system.latitude"),
+            this.settings.get("system.longitude")
+        ) === true;
+    }
+
+    /**
+     * Re-send held stages before their TTL expires.
+     *
+     * Without this the camera would decay to idle every few seconds while
+     * someone is still standing at the door — the TTL is a dead-man's switch,
+     * so something has to keep feeding it.
+     */
+    _startLedRefresh () {
+        this._ledTimer = setInterval(() => {
+            const now = Date.now();
+            for (const [camId, state] of this._ledState) {
+                if (!state.stage || !state.ttlMs) continue;
+                if (now - state.sentAt < refreshIntervalFor(state.ttlMs)) continue;
+                this.sendLedCommand(camId, state.stage, {});
+            }
+        }, LED_TICK_MS);
+        this._ledTimer.unref?.();
+    }
+
+    // ==================================================================
+    //  Event log — thin delegates over event-log.js
+    // ==================================================================
+
+    /**
+     * A camera that stops reporting gets logged as an event. See event-log.js
+     * for why this is worth having at all.
+     */
+    _startOfflineMonitor () {
+        this._offlineTimer = setInterval(() => eventLog.checkOffline(this), OFFLINE_CHECK_MS);
+        this._offlineTimer.unref?.();
+    }
+
+    _onEventFinalized (event) { return eventLog.onEventFinalized(this, event); }
+    redescribeEvent (eventId) { return eventLog.redescribeEvent(this, eventId); }
+    redescribeAll (camId) { return eventLog.redescribeAll(this, camId); }
+    deleteEvent (eventId) { return eventLog.deleteEvent(this, eventId); }
+
+    // Media serving lives in media.js; these keep the route table unchanged.
+    serveEventFile (eventId, kind, req, res) {
+        return media.serveEventFile(this, eventId, kind, req, res);
+    }
+
+    serveSampleImage (sampleId, req, res) {
+        return media.serveSampleImage(this, sampleId, req, res);
+    }
+
+    serveSnapshot (camId, res) {
+        return media.serveSnapshot(this, camId, res);
     }
 
     serveMjpeg (camId, req, res) {
-        const cam = this.getCam(camId);
-        res.writeHead(200, {
-            "Content-Type": `multipart/x-mixed-replace; boundary=${MJPEG_BOUNDARY}`,
-            "Cache-Control": "no-cache, private",
-            "Pragma": "no-cache",
-            "Connection": "close"
-        });
-
-        let lastSeq = -1;
-        let closed = false;
-        const markClosed = () => { closed = true; };
-        req.on("close", markClosed);
-        res.on("close", markClosed);
-        res.on("error", markClosed);
-
-        const tick = () => {
-            if (closed) return;
-            if (cam.desiredState !== "on" || !cam.lastJpeg || cam.frameSeq === lastSeq) {
-                setTimeout(tick, 50);
-                return;
-            }
-            lastSeq = cam.frameSeq;
-            const jpeg = cam.lastJpeg;
-            const head = Buffer.from(
-                `--${MJPEG_BOUNDARY}\r\nContent-Type: image/jpeg\r\nContent-Length: ${jpeg.length}\r\n\r\n`,
-                "ascii"
-            );
-            let drained;
-            try {
-                res.write(head);
-                res.write(jpeg);
-                drained = res.write("\r\n");
-            } catch (_) {
-                closed = true;
-                return;
-            }
-            if (drained === false) {
-                res.once("drain", tick);
-                return;
-            }
-            setImmediate(tick);
-        };
-        tick();
+        return media.serveMjpeg(this, camId, req, res);
     }
+
+    // ==================================================================
+    //  Profiles — thin delegates over enrollment.js
+    // ==================================================================
+
+    deleteProfile (profileId) { return enrollment.deleteProfile(this, profileId); }
+    addFaceSample (profileId, body) { return enrollment.addFaceSample(this, profileId, body); }
+    deleteFaceSample (sampleId) { return enrollment.deleteFaceSample(this, sampleId); }
+
+    // ==================================================================
+    //  Settings reactions
+    // ==================================================================
+
+    _onSettingsChanged (changed) {
+        if (this.storage) this.storage.onSettingsChanged(changed);
+
+        // Pre-roll depth and frame rate change the ring buffer's shape, so a
+        // saved setting has to reach the buffers that are already allocated.
+        if (changed.some((k) => k === "recording.preRollSeconds" || k === "recording.fps")) {
+            for (const [camId, cam] of this.cams) {
+                cam.frameBuffer.setCapacity({
+                    seconds: this.settings.get("recording.preRollSeconds", camId),
+                    fps: this.settings.get("recording.fps", camId)
+                });
+            }
+        }
+
+        if (changed.some((k) => k.startsWith("led."))) {
+            for (const camId of this.cams.keys()) this._sendLedConfig(camId);
+        }
+    }
+
+    // ==================================================================
+    //  HTTP
+    // ==================================================================
+
+    handleHttp (req, res) {
+        // Wide-open CORS: the hub is a LAN appliance and the MagicMirror module
+        // runs from a different origin. The wildcard is also what lets the
+        // browser read MJPEG pixels back for the stream stall detector.
+        res.setHeader("Access-Control-Allow-Origin", "*");
+        res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
+        res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+        if (req.method === "OPTIONS") { res.writeHead(204); res.end(); return; }
+
+        // WHATWG URL rather than the legacy `url.parse`, which Node flags as
+        // non-standard and security-relevant. The base is a placeholder — only
+        // the path and query are ever used.
+        let parsedUrl;
+        try {
+            parsedUrl = new URL(req.url, "http://localhost");
+        } catch (_) {
+            return sendError(res, 400, "malformed request URL");
+        }
+        const pathname = parsedUrl.pathname || "/";
+        const parsed = { query: Object.fromEntries(parsedUrl.searchParams) };
+
+        const route = matchRoute(req.method, pathname);
+        if (!route) return sendError(res, 404, "not found");
+
+        // The store backs almost everything; fail clearly rather than throwing
+        // a TypeError deep inside a handler.
+        if (!this.store && needsStore(pathname)) {
+            return sendError(res, 503, "event store unavailable", {
+                detail: this.storeError || "database failed to open"
+            });
+        }
+
+        try {
+            const result = route.handler({
+                hub: this, req, res, query: parsed.query || {}, params: route.params
+            });
+            if (result && typeof result.catch === "function") {
+                result.catch((err) => this._handlerError(res, err));
+            }
+        } catch (err) {
+            this._handlerError(res, err);
+        }
+    }
+
+    _handlerError (res, err) {
+        this.log.error(`[hub] request handler failed: ${err && err.stack || err}`);
+        if (res.headersSent) { try { res.end(); } catch (_) { /* ignore */ } return; }
+        sendError(res, 500, "internal error");
+    }
+
+}
+
+/** Routes that can't do anything useful without the database. */
+function needsStore (pathname) {
+    return /^\/(events|settings|storage|profiles|recognition)/.test(pathname)
+        || /^\/cam\/[^/]+\/(events|zones|settings)$/.test(pathname);
 }
 
 module.exports = { HubServer };

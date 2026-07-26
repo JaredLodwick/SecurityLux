@@ -1,37 +1,82 @@
 # SecurityLuxHub configuration.
 #
 # Copy this file to /etc/security-lux-hub/config.yml (or anywhere you point
-# $SECURITY_LUX_HUB_CONFIG / the first CLI arg at) and tune to taste. Every key has a
-# built-in default; partial files are fine.
+# $SECURITY_LUX_HUB_CONFIG / the first CLI arg at) and tune to taste. Every key
+# has a built-in default; partial files are fine.
+#
+# ---------------------------------------------------------------------------
+#  How settings resolve
+# ---------------------------------------------------------------------------
+#
+#   built-in defaults  ->  this file  ->  saved in the web UI  ->  per-camera
+#
+# Anything you change in the web UI is stored in the database and takes
+# precedence over this file. That means this file is for bootstrapping and for
+# the handful of settings the UI can't reach (which port to bind, where the
+# database lives), while day-to-day tuning happens at http://<hub>:5000/.
+#
+# Editing a value here that you have also changed in the UI will appear to do
+# nothing — clear the override in the UI ("reset to default") to hand control
+# back to this file.
 
 hub:
-  port: 5000          # HTTP + WebSocket port. Camera nodes connect to ws://<this-host>:<port>/cam/<id>
+  port: 5000          # HTTP + WebSocket port. Cameras connect to ws://<this-host>:<port>/cam/<id>
   bindAddr: 0.0.0.0   # listen on all interfaces; use 127.0.0.1 to restrict to localhost
 
 # --- Person detection ---
-# Off by default so a fresh install doesn't burn CPU before the user opts in.
-# Toggle at runtime via:  curl -X POST -H 'Content-Type: application/json' \
-#                              -d '{"enabled":true}' http://localhost:5000/detection
+# Off by default so a fresh install doesn't burn CPU before you opt in.
+# Toggle at runtime from the dashboard, or:
+#   curl -X POST -H 'Content-Type: application/json' \
+#        -d '{"enabled":true}' http://localhost:5000/detection
 detection:
   enabled: false
-  fps: 2                        # detector ticks per second
-  confidence: 0.45              # minimum person-class score to count as a detection
   classes: ["person"]
   modelUrl: "https://github.com/JaredLodwick/SecurityLux/releases/download/models-v1/yolov8n-int8.onnx"
   modelSha256: ""               # set non-empty to enable integrity checking
 
+  # Tuning knobs — also editable in the dashboard under Settings > Detection.
+  fps: 2                        # detector ticks per second
+  confidence: 0.45              # minimum person score to count as a detection
+
 # --- Per-event video recording ---
+# All of these are editable in the dashboard under Settings > Recording, and can
+# be overridden per camera.
 recording:
-  codec: mkv             # "mkv" (MJPEG stream-copy, ~zero CPU) or "h264" (libx264 ultrafast)
-  fps: 15                # matches camera output
-  minClipSeconds: 2      # sub-2s sessions get dropped (false-positive filter)
-  maxClipSeconds: 300    # cap a single clip at 5min; new clip starts after
-  graceMs: 1500          # how long after the last person frame before a session ends
-  retentionDays: 14      # daily sweep deletes events + clips older than this
+  # "h264" (mp4) is the default: roughly 13x smaller than MJPEG for the same
+  # footage and plays natively in every browser including iOS Safari. It costs
+  # about 10% of one Pi 4 core per camera.
+  #
+  # "mkv" stream-copies the camera's MJPEG at near-zero CPU, but writes ~27 MB
+  # per minute and many browsers won't play it. Use it only if the hub is
+  # genuinely CPU-starved.
+  codec: h264
+  crf: 28                # h264 quality: lower = better + bigger. 23 near-lossless, 32 soft.
+  fps: 15                # should match the camera's capture fps
+
+  # Pre-roll is what captures the walk-up. Without it a clip opens with someone
+  # already standing in frame, because recording starts when detection fires.
+  preRollSeconds: 5
+  postRollSeconds: 5     # keep recording after the person leaves
+
+  minClipSeconds: 2      # shorter detections are discarded as false positives
+  maxClipSeconds: 300    # a longer continuous event is split into a new clip
+  graceMs: 1500          # absence this long ends the event
+  retentionDays: 14      # delete events + clips older than this
 
 storage:
-  clipsRoot: "~/Videos/SecurityLux"     # mkv/mp4 files land here, organized by date
-  dbPath: "~/.securityluxhub/events.db"    # SQLite event log
+  clipsRoot: "~/Videos/SecurityLux"        # clips + thumbnails, organized by date
+  dbPath: "~/.securityluxhub/events.db"    # SQLite: events, settings, zones, profiles
+
+  # The two limits below are UI-only (Settings > Storage) because they need to
+  # be adjustable without a restart when a disk is filling up:
+  #
+  #   maxTotalGB   budget for clips; over it, oldest video is reclaimed while
+  #                the event rows survive
+  #   minFreeGB    hard floor on the filesystem; below it the hub stops writing
+  #                new clips but keeps logging events
+  #
+  # Defaults are 16 GB and 4 GB. On a 64 GB card those are sensible; on a
+  # dedicated 1 TB disk you'll want to raise maxTotalGB considerably.
 
 logging:
   level: info            # debug | info | warn | error

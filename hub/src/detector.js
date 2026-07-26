@@ -6,12 +6,13 @@
  * Responsibilities:
  *  - Lazy-download the ONNX model on first start (SHA-256 verified).
  *  - Spawn one worker_threads.Worker that loads the model once.
- *  - Run a per-cam tick loop at `detection.fps` that posts the latest JPEG
- *    to the worker and feeds detections back into the SessionManager.
+ *  - Run a per-cam tick loop that posts the latest JPEG to the worker and
+ *    hands detections back to the SessionManager.
+ *  - Decide when the motion gate may skip inference — see `_shouldForce`.
  *  - Auto-restart the worker on unexpected exit (with backoff).
  *
- * The worker is shared across cams (round-robin). At one cam today + the
- * roadmap's multi-cam future this keeps memory low (model loaded once).
+ * The worker is shared across cameras so the model is loaded once no matter how
+ * many cameras exist, which is what keeps hub memory flat as cameras are added.
  */
 
 const { Worker } = require("node:worker_threads");
@@ -29,39 +30,57 @@ const WORKER_RESTART_WINDOW_MS = 60_000;
 const STALE_FRAME_MS = 5_000;
 const LATENCY_LOG_INTERVAL_MS = 60_000;
 
+/**
+ * How often a frame runs through the model regardless of the motion gate.
+ *
+ * This is a correctness guard, not a tuning knob. Someone who walks up and then
+ * stands perfectly still stops generating motion; without a periodic forced
+ * inference the gate would conclude the scene is empty and the recording would
+ * end with them still standing at the door.
+ */
+const FORCE_INFERENCE_EVERY_MS = 4_000;
+
 class Detector {
     /**
      * @param {object} opts
-     * @param {object} opts.detectionCfg   Hub `detection` config block.
-     * @param {Function} opts.onObservation `(observation) => void` where
-     *   `observation = { camId, hasPerson, confidence, cls, bbox, frameSeq, ts }`
-     *   and `bbox` is normalized 0-1 cx/cy/w/h (or null when no person).
+     * @param {object} opts.settings       SettingsService.
+     * @param {object} opts.detectionCfg   Static bits from config.yml (model URL/hash).
+     * @param {Function} opts.onObservation
+     *   `(observation) => void` where observation is
+     *   `{ camId, detections: [{cls, confidence, bbox}], hasPerson, frameSeq, ts, skipped }`
+     *   and each bbox is normalized 0-1 cx/cy/w/h.
+     * @param {Function} [opts.isSessionActive]  `(camId) => boolean`; disables the motion gate.
      * @param {object} [opts.logger]
      * @param {string} [opts.modelDir]     Override for tests.
      */
-    constructor({ detectionCfg, onObservation, logger, modelDir }) {
-        if (!detectionCfg) throw new Error("Detector: detectionCfg is required");
+    constructor({ settings, detectionCfg, onObservation, isSessionActive, logger, modelDir }) {
+        if (!settings) throw new Error("Detector: settings is required");
         if (typeof onObservation !== "function") throw new Error("Detector: onObservation is required");
-        this.cfg = detectionCfg;
+
+        this.settings = settings;
+        this.cfg = detectionCfg || {};
         this.onObservation = onObservation;
+        this.isSessionActive = isSessionActive || (() => false);
         this.log = logger || console;
         this.modelDir = expandHome(modelDir || DEFAULT_MODEL_DIR);
 
-        this.cams = new Map();          // camId -> { cam, timer, lastInferSeq, pending }
+        this.cams = new Map();          // camId -> { cam, timer, lastInferSeq, pending, lastForcedAt }
         this.worker = null;
         this.workerReady = false;
         this.modelPath = null;
         this.nextJobId = 1;
-        this.pendingJobs = new Map();   // jobId -> { resolve, reject }
-        this._restartHistory = [];      // timestamps of recent restarts
+        this.pendingJobs = new Map();
+        this._restartHistory = [];
         this._latencySamples = [];
+        this._skipCount = 0;
+        this._runCount = 0;
         this._latencyTimer = null;
     }
 
     /**
      * Bring the detector up: ensure model present, spawn worker. Idempotent.
-     * Returns `{ ok: true }` on success, `{ ok: false, error: string }` on
-     * failure. Caller decides whether to surface the error or just log.
+     * Returns `{ ok: true }` or `{ ok: false, error }` so the caller can decide
+     * whether to surface the failure or just log it.
      */
     async start() {
         if (this.worker) return { ok: true };
@@ -79,13 +98,12 @@ class Detector {
         return { ok: true };
     }
 
-    /**
-     * Register a camera for detection ticks. Safe to call multiple times.
-     */
     attachCam(cam) {
         if (!cam || !cam.id) return;
         if (this.cams.has(cam.id)) return;
-        this.cams.set(cam.id, { cam, timer: null, lastInferSeq: -1, pending: false });
+        this.cams.set(cam.id, {
+            cam, timer: null, lastInferSeq: -1, pending: false, lastForcedAt: 0
+        });
         this._scheduleNextTick(cam.id);
     }
 
@@ -94,10 +112,15 @@ class Detector {
         if (!entry) return;
         if (entry.timer) clearTimeout(entry.timer);
         this.cams.delete(camId);
+        // Drop the worker's motion reference so a reconnecting camera doesn't
+        // get compared against a frame from before it went away.
+        if (this.worker) {
+            try { this.worker.postMessage({ kind: "forget", camId }); } catch (_) { /* ignore */ }
+        }
     }
 
     async stop() {
-        for (const [camId, entry] of this.cams) {
+        for (const entry of this.cams.values()) {
             if (entry.timer) clearTimeout(entry.timer);
         }
         this.cams.clear();
@@ -106,14 +129,23 @@ class Detector {
             this._latencyTimer = null;
         }
         if (this.worker) {
-            try { this.worker.postMessage({ kind: "shutdown" }); } catch (_) { /* ignore */ }
-            try { await this.worker.terminate(); } catch (_) { /* ignore */ }
-            this.worker = null;
+            const worker = this.worker;
+            this.worker = null;         // marks the exit as intentional
+            try { worker.postMessage({ kind: "shutdown" }); } catch (_) { /* ignore */ }
+            try { await worker.terminate(); } catch (_) { /* ignore */ }
             this.workerReady = false;
         }
-        // Reject any pending jobs so callers don't await forever.
         for (const job of this.pendingJobs.values()) job.reject(new Error("detector stopped"));
         this.pendingJobs.clear();
+    }
+
+    stats() {
+        const total = this._skipCount + this._runCount;
+        return {
+            framesInferred: this._runCount,
+            framesSkipped: this._skipCount,
+            skipRatio: total ? this._skipCount / total : 0
+        };
     }
 
     // ---- internals ----
@@ -150,8 +182,12 @@ class Detector {
             const job = this.pendingJobs.get(msg.jobId);
             if (job) {
                 this.pendingJobs.delete(msg.jobId);
-                this._latencySamples.push(msg.latencyMs);
-                job.resolve({ camId: msg.camId, frameSeq: msg.frameSeq, detections: msg.detections });
+                if (msg.skipped) this._skipCount += 1;
+                else {
+                    this._runCount += 1;
+                    this._latencySamples.push(msg.latencyMs);
+                }
+                job.resolve(msg);
             }
             return;
         }
@@ -181,24 +217,44 @@ class Detector {
         const now = Date.now();
         this._restartHistory = this._restartHistory.filter((t) => now - t < WORKER_RESTART_WINDOW_MS);
         if (this._restartHistory.length >= WORKER_RESTART_MAX) {
-            this.log.error(`[hub] detector worker died ${WORKER_RESTART_MAX} times in ${WORKER_RESTART_WINDOW_MS / 1000}s; giving up`);
+            this.log.error(
+                `[hub] detector worker died ${WORKER_RESTART_MAX} times in ` +
+                `${WORKER_RESTART_WINDOW_MS / 1000}s; giving up`
+            );
             return;
         }
         this._restartHistory.push(now);
         this.log.warn(`[hub] detector worker exited code=${code}; restarting`);
-        // Backoff so we don't hot-loop on a broken model.
-        setTimeout(() => this._spawnWorker(), 1000);
+        setTimeout(() => this._spawnWorker(), 1000).unref?.();
     }
 
     _scheduleNextTick(camId) {
         const entry = this.cams.get(camId);
         if (!entry) return;
-        const intervalMs = Math.max(100, Math.floor(1000 / Math.max(this.cfg.fps || 2, 0.25)));
+        const fps = this.settings.get("detection.fps");
+        const intervalMs = Math.max(66, Math.floor(1000 / Math.max(fps || 2, 0.25)));
         if (entry.timer) clearTimeout(entry.timer);
         entry.timer = setTimeout(() => this._tick(camId).catch((err) => {
             this.log.warn(`[hub] detector tick error: ${err && err.message}`);
         }), intervalMs);
         if (typeof entry.timer.unref === "function") entry.timer.unref();
+    }
+
+    /**
+     * Should this frame bypass the motion gate?
+     *
+     * Yes while a session is active — a stationary person must keep being seen
+     * or the recording ends underneath them. Yes periodically otherwise, so a
+     * subject who arrives during a skipped frame and then holds still is still
+     * picked up within a few seconds.
+     */
+    _shouldForce(camId, entry, now) {
+        if (this.isSessionActive(camId)) return true;
+        if (now - entry.lastForcedAt >= FORCE_INFERENCE_EVERY_MS) {
+            entry.lastForcedAt = now;
+            return true;
+        }
+        return false;
     }
 
     async _tick(camId) {
@@ -210,9 +266,10 @@ class Detector {
         }
 
         const { cam } = entry;
-        const stale = Date.now() - (cam.lastJpegAt || 0) > STALE_FRAME_MS;
+        const now = Date.now();
+        const stale = now - (cam.lastJpegAt || 0) > STALE_FRAME_MS;
         const off = cam.desiredState !== "on";
-        const muted = cam.detectionEnabled === false;     // per-cam runtime mute
+        const muted = !this.settings.get("detection.enabled", camId);
         const sameFrame = cam.frameSeq === entry.lastInferSeq;
 
         if (off || muted || stale || !cam.lastJpeg || sameFrame || entry.pending) {
@@ -223,37 +280,39 @@ class Detector {
         entry.lastInferSeq = cam.frameSeq;
         entry.pending = true;
         try {
-            const result = await this._postInfer(cam.id, cam.frameSeq, cam.lastJpeg);
-            const det = result.detections.find((d) => d.cls === "person");
+            const result = await this._postInfer(camId, entry, cam, now);
+            const detections = result.detections || [];
             try {
                 this.onObservation({
                     camId,
-                    hasPerson: !!det,
-                    confidence: det ? det.confidence : 0,
-                    cls: det ? det.cls : null,
-                    bbox: det ? det.bbox : null,    // normalized 0-1 cx/cy/w/h
+                    detections,
+                    hasPerson: detections.length > 0,
+                    confidence: detections.length ? detections[0].confidence : 0,
+                    bbox: detections.length ? detections[0].bbox : null,
                     frameSeq: result.frameSeq,
+                    skipped: !!result.skipped,
                     ts: Date.now()
                 });
             } catch (err) {
                 this.log.warn(`[hub] onObservation handler threw: ${err && err.message}`);
             }
-        } catch (err) {
-            // Don't spam — the worker exit path already logs.
+        } catch (_) {
+            // The worker exit path already logs; don't double-report per tick.
         } finally {
             entry.pending = false;
             this._scheduleNextTick(camId);
         }
     }
 
-    _postInfer(camId, frameSeq, jpegBuffer) {
+    _postInfer(camId, entry, cam, now) {
         if (!this.worker) return Promise.reject(new Error("worker not running"));
         const jobId = this.nextJobId;
         this.nextJobId += 1;
 
-        // Copy the JPEG into a fresh ArrayBuffer so we can transfer ownership
-        // to the worker without the underlying Buffer being mutated under us
-        // when a new frame arrives mid-flight.
+        // Copy into a fresh ArrayBuffer so ownership can be transferred to the
+        // worker without the source Buffer being replaced under us when the next
+        // frame lands mid-flight.
+        const jpegBuffer = cam.lastJpeg;
         const ab = new ArrayBuffer(jpegBuffer.byteLength);
         new Uint8Array(ab).set(jpegBuffer);
 
@@ -264,8 +323,11 @@ class Detector {
                     kind: "infer",
                     jobId,
                     camId,
-                    frameSeq,
-                    confidence: this.cfg.confidence ?? 0.45,
+                    frameSeq: cam.frameSeq,
+                    confidence: this.settings.get("detection.confidence", camId),
+                    motionGate: this.settings.get("detection.motionGate", camId),
+                    motionThreshold: this.settings.get("detection.motionThreshold", camId),
+                    force: this._shouldForce(camId, entry, now),
                     jpeg: ab
                 }, [ab]);
             } catch (err) {
@@ -280,7 +342,12 @@ class Detector {
         const sorted = [...this._latencySamples].sort((a, b) => a - b);
         const p50 = sorted[Math.floor(sorted.length * 0.5)];
         const p95 = sorted[Math.floor(sorted.length * 0.95)];
-        this.log.info(`[hub] detector latency p50=${p50}ms p95=${p95}ms n=${sorted.length}`);
+        const total = this._skipCount + this._runCount;
+        const skipPct = total ? Math.round((this._skipCount / total) * 100) : 0;
+        this.log.info(
+            `[hub] detector latency p50=${p50}ms p95=${p95}ms n=${sorted.length} ` +
+            `(motion gate skipped ${skipPct}% of frames)`
+        );
         this._latencySamples = [];
     }
 
@@ -333,7 +400,7 @@ function downloadToFile(url, destPath, redirectCount = 0) {
             }
             const out = fs.createWriteStream(destPath);
             res.pipe(out);
-            out.on("finish", () => out.close((err) => err ? reject(err) : resolve()));
+            out.on("finish", () => out.close((err) => (err ? reject(err) : resolve())));
             out.on("error", reject);
         });
         req.on("error", reject);
