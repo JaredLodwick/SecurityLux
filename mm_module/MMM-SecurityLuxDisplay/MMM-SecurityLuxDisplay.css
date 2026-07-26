@@ -28,6 +28,14 @@
 	justify-content: center;
 }
 
+/* StreamKeeper owns a wrapper div and swaps the <img> inside it on reconnect,
+   so both need to fill the frame. */
+.mmm-securitylux-display .sl-stream {
+	width: 100%;
+	height: 100%;
+	display: block;
+}
+
 .mmm-securitylux-display .securitylux-stream {
 	width: 100%;
 	height: 100%;
@@ -126,6 +134,52 @@
 @keyframes securitylux-event-pulse {
 	0%, 100% { opacity: 1; }
 	50% { opacity: 0.55; }
+}
+
+/* --- Last event: plain-English description + relative time. --- */
+
+.mmm-securitylux-display .securitylux-last-event {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	margin-top: 6px;
+	text-align: left;
+	font-size: 0.72em;
+	color: #bbb;
+	line-height: 1.35;
+}
+
+.mmm-securitylux-display .securitylux-last-event-thumb {
+	width: 46px;
+	height: 32px;
+	object-fit: cover;
+	border-radius: 3px;
+	border: 1px solid #333;
+	flex-shrink: 0;
+}
+
+.mmm-securitylux-display .securitylux-last-event-body {
+	min-width: 0;
+}
+
+.mmm-securitylux-display .securitylux-last-event-text {
+	color: #ddd;
+	/* Two lines then ellipsis — a mirror is read at a glance, and a
+	   description that reflows the layout is worse than one that truncates. */
+	display: -webkit-box;
+	-webkit-line-clamp: 2;
+	-webkit-box-orient: vertical;
+	overflow: hidden;
+}
+
+.mmm-securitylux-display .securitylux-last-event-time {
+	color: #777;
+	font-size: 0.9em;
+	margin-top: 1px;
+}
+
+.mmm-securitylux-display .securitylux-last-event-alert .securitylux-last-event-text {
+	color: #e0b24c;
 }
 
 /* --- Toggle (kept for users who opt back into showToggleButton). --- */
