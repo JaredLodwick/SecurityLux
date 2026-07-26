@@ -40,6 +40,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "port": 8423,
         "timeout_seconds": 1.0,
     },
+    # Door light. These are the *bootstrap* values used before the hub
+    # connects; the hub pushes the authoritative config in a `led_config`
+    # message on every connect, so day-to-day changes happen in the web UI.
+    "led": {
+        "enabled": False,
+        "count": 8,
+        "max_brightness": 0.4,
+    },
     "logging": {
         "level": "INFO",
     },

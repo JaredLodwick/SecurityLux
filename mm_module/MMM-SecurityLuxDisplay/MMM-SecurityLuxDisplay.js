@@ -1,30 +1,36 @@
 /**
  * MMM-SecurityLuxDisplay — MagicMirror² display for SecurityLuxHub.
  *
- * Pure browser-side module. No node_helper, no embedded server. Talks to a
- * remote SecurityLuxHub over HTTP:
+ * Pure browser-side module. No node_helper, no embedded server, no npm install.
+ * Talks to a remote SecurityLuxHub over HTTP:
  *
- *   - Live MJPEG  →  <img src="${hubUrl}/cam/<camId>/stream.mjpg?t=...">
- *   - Live status →  fetch(${hubUrl}/cam/<camId>/status) every `pollMs`
- *   - Toggle      →  fetch(${hubUrl}/cam/<camId>/toggle, { method: 'POST', body })
+ *   - Live MJPEG  →  StreamKeeper, pointed at /cam/<id>/stream.mjpg
+ *   - Live status →  fetch(/cam/<id>/status) every `pollMs`
+ *   - Last event  →  fetch(/events/latest?cam=<id>)
+ *   - Toggle      →  fetch(/cam/<id>/toggle, { method: "POST" })
  *
- * The hub can run anywhere on the LAN: same Pi as MagicMirror, a spare Pi,
- * a desktop. As long as `hubUrl` is reachable from this browser, the module
- * works.
+ * ============================================================================
+ *  The blackout fix
+ * ============================================================================
+ *
+ * This module used to blank out after a few minutes. The cause was its own
+ * recovery code: a `streamRefreshSeconds: 300` timer nulled the <img>'s src and
+ * relied on MagicMirror's `updateDom()` (morphdom) to apply a new one. morphdom
+ * reconciles the *existing* element rather than swapping in the freshly built
+ * one, so the request was never actually re-issued — and the old multipart
+ * connection was never released either, which burned one of the browser's ~6
+ * connections per origin each time round.
+ *
+ * The fix is structural: the <img> is owned by StreamKeeper and lives outside
+ * MagicMirror's DOM diffing entirely. `getDom()` returns StreamKeeper's stable
+ * wrapper element, so morphdom has nothing to reconcile and the video element
+ * survives every re-render. Reconnects now happen on evidence — an error, the
+ * page becoming visible again, or frozen pixels while the hub reports fresh
+ * frames — rather than on a blind timer.
+ *
+ * See stream-keeper.js for the details. That file is the same source the hub
+ * dashboard serves; keep the two copies identical.
  */
-
-function detectionEqual (a, b) {
-	if (a === b) return true;
-	if (!a || !b) return false;
-	if (a.class !== b.class) return false;
-	if (Math.abs((a.confidence || 0) - (b.confidence || 0)) > 0.01) return false;
-	const ab = a.bbox || {}; const bb = b.bbox || {};
-	const eps = 0.005; // 0.5% of frame; below that is invisible at 320px width
-	return Math.abs((ab.cx || 0) - (bb.cx || 0)) < eps
-		&& Math.abs((ab.cy || 0) - (bb.cy || 0)) < eps
-		&& Math.abs((ab.w  || 0) - (bb.w  || 0)) < eps
-		&& Math.abs((ab.h  || 0) - (bb.h  || 0)) < eps;
-}
 
 Module.register("MMM-SecurityLuxDisplay", {
 	defaults: {
@@ -35,88 +41,113 @@ Module.register("MMM-SecurityLuxDisplay", {
 		hideWhenOff: true,
 		showToggleButton: false,
 		showStatusBar: true,
+		showLastEvent: true,
+		showLastEventThumbnail: false,
 		width: "320px",
 		title: "Security Lux",
 
-		// Polling + stream-recovery knobs.
-		pollMs: 500,                        // matches default detector tick rate
-		streamRefreshSeconds: 300,          // belt-and-suspenders against silent MJPEG drops
-		staleFrameMs: 10000,                // server-side last_frame_age_ms threshold for refresh
-		errorRetryMs: 1500                  // how long to wait after an <img> error before re-fetching
-	},
+		// Hide the last event once it's stale, so the mirror isn't still
+		// advertising yesterday's news at breakfast. 0 disables the cutoff.
+		lastEventMaxAgeMinutes: 120,
 
-	start () {
-		this.status = null;
-		this.cameraState = null;
-		this.inFlightToggle = false;
-		this.streamNonce = Date.now();
-		this._pollTimer = null;
-		this._refreshTimer = null;
-		this._suspended = false;
-		this._scheduleNextPoll(0);   // first poll fires asap
-	},
+		// Polling.
+		pollMs: 1000,                       // status poll cadence
+		eventPollMs: 15000,                 // last-event poll cadence
 
-	suspend () {
-		this._suspended = true;
-		this._stopPollTimer();
-		this._stopRefreshTimer();
-	},
-
-	resume () {
-		this._suspended = false;
-		this._scheduleNextPoll(0);
+		// StreamKeeper tuning. The defaults are sensible; these are here so a
+		// flaky WiFi link can be given more slack without editing the module.
+		stallTimeoutMs: 6000,
+		reconnectBackoffMs: 1000
 	},
 
 	getStyles () {
 		return [this.file("MMM-SecurityLuxDisplay.css")];
 	},
 
-	notificationReceived (notification) {
-		if (notification === "SECURITY_LUX_TOGGLE") {
-			this.requestToggle();
-		} else if (notification === "SECURITY_LUX_ON") {
-			this.requestToggle("on");
-		} else if (notification === "SECURITY_LUX_OFF") {
-			this.requestToggle("off");
-		}
+	getScripts () {
+		return [this.file("stream-keeper.js")];
 	},
 
-	/* ---- status polling ---- */
+	start () {
+		this.status = null;
+		this.cameraState = null;
+		this.lastEvent = null;
+		this.inFlightToggle = false;
+		this.keeper = null;
+
+		this._pollTimer = null;
+		this._eventTimer = null;
+		this._suspended = false;
+
+		this._pollStatus();
+		this._pollLastEvent();
+	},
+
+	suspend () {
+		// MagicMirror hides this module (page rotation, etc). Drop the stream
+		// so it isn't holding a connection slot for a view nobody can see.
+		this._suspended = true;
+		this._stopTimers();
+		if (this.keeper) this.keeper.setActive(false);
+	},
+
+	resume () {
+		this._suspended = false;
+		this._pollStatus();
+		this._pollLastEvent();
+	},
+
+	notificationReceived (notification) {
+		if (notification === "SECURITY_LUX_TOGGLE") this.requestToggle();
+		else if (notification === "SECURITY_LUX_ON") this.requestToggle("on");
+		else if (notification === "SECURITY_LUX_OFF") this.requestToggle("off");
+	},
+
+	/* ---- polling ---- */
 
 	async _pollStatus () {
 		if (this._suspended) return;
-		const url = `${this._hubBase()}/cam/${encodeURIComponent(this.config.camId)}/status`;
 		try {
-			const res = await fetch(url, { cache: "no-store" });
+			const res = await fetch(this._url(`/cam/${this._camId()}/status`), { cache: "no-store" });
 			if (!res.ok) throw new Error("HTTP " + res.status);
-			const status = await res.json();
-			this._applyStatus(status);
-		} catch (err) {
-			// Hub unreachable. Mark as offline so the placeholder reflects it,
-			// but only once (don't thrash updateDom on repeated failures).
-			if (this.status && this.status.connected !== false) {
-				this.status = Object.assign({}, this.status, { connected: false });
-				this.updateDom();
-			} else if (!this.status) {
-				this.status = { cam_id: this.config.camId, connected: false, state: null };
+			this._applyStatus(await res.json());
+		} catch (_) {
+			// Hub unreachable. Reflect it once rather than thrashing updateDom
+			// on every failed poll.
+			if (!this.status || this.status.connected !== false) {
+				this.status = Object.assign({}, this.status || {}, {
+					cam_id: this.config.camId, connected: false, state: null
+				});
+				this._syncKeeper();
 				this.updateDom();
 			}
 		}
-		this._scheduleNextPoll(this.config.pollMs);
+		this._pollTimer = setTimeout(() => this._pollStatus(), Math.max(250, this.config.pollMs));
 	},
 
-	_scheduleNextPoll (delay) {
+	async _pollLastEvent () {
 		if (this._suspended) return;
-		this._stopPollTimer();
-		const ms = Math.max(100, Number(delay) || this.config.pollMs);
-		this._pollTimer = setTimeout(() => this._pollStatus(), ms);
+		if (this.config.showLastEvent) {
+			try {
+				const res = await fetch(
+					this._url(`/events/latest?cam=${this._camId()}`), { cache: "no-store" }
+				);
+				if (res.ok) {
+					const event = await res.json();
+					const changed = (event && event.id) !== (this.lastEvent && this.lastEvent.id);
+					this.lastEvent = event;
+					if (changed) this.updateDom();
+				}
+			} catch (_) { /* leave the previous event in place */ }
+		}
+		this._eventTimer = setTimeout(
+			() => this._pollLastEvent(), Math.max(2000, this.config.eventPollMs)
+		);
 	},
 
-	_stopPollTimer () {
-		if (this._pollTimer) {
-			clearTimeout(this._pollTimer);
-			this._pollTimer = null;
-		}
+	_stopTimers () {
+		if (this._pollTimer) { clearTimeout(this._pollTimer); this._pollTimer = null; }
+		if (this._eventTimer) { clearTimeout(this._eventTimer); this._eventTimer = null; }
 	},
 
 	_applyStatus (next) {
@@ -126,83 +157,55 @@ Module.register("MMM-SecurityLuxDisplay", {
 		const prevState = this.cameraState;
 		this.status = next;
 		this.cameraState = next.state || null;
-
-		let nonceChanged = false;
-		if (prevState !== this.cameraState && this.cameraState === "on") {
-			this._refreshStreamSrc();
-			nonceChanged = true;
-		}
-		if (!nonceChanged && this.cameraState === "on" && next.connected) {
-			const ageMs = next.last_frame_age_ms;
-			if (typeof ageMs === "number" && isFinite(ageMs) && ageMs > this.config.staleFrameMs) {
-				this._refreshStreamSrc();
-				nonceChanged = true;
-			}
-		}
-
-		if (this.cameraState === "on") {
-			this._scheduleRefreshTimer();
-		} else {
-			this._stopRefreshTimer();
-		}
 		this.inFlightToggle = false;
 
-		// Skip the morphdom diff when nothing visible changed. The hub pushes
-		// status implicitly on every detector tick (~2 Hz) so this matters.
-		if (nonceChanged || this._statusChangedVisibly(prev, next, prevState)) {
-			this.updateDom();
-		}
+		this._syncKeeper();
+
+		// Skip the DOM diff when nothing visible changed. Status is polled
+		// once a second; re-rendering that often for no reason is wasted work
+		// on a Pi that is also driving a mirror.
+		if (this._changedVisibly(prev, next, prevState)) this.updateDom();
 	},
 
-	_statusChangedVisibly (prev, next, prevState) {
+	_changedVisibly (prev, next, prevState) {
 		if (!prev) return true;
 		if (prevState !== this.cameraState) return true;
 		if (prev.connected !== next.connected) return true;
 		if (prev.battery_pct !== next.battery_pct) return true;
 		if (prev.on_battery !== next.on_battery) return true;
-		if (!detectionEqual(prev.current_detection, next.current_detection)) return true;
-		return false;
+		if (prev.behavior !== next.behavior) return true;
+		return !detectionEqual(prev.current_detection, next.current_detection);
 	},
 
-	/* ---- MJPEG stream lifecycle ---- */
+	/* ---- stream ---- */
 
-	_scheduleRefreshTimer () {
-		const seconds = Number(this.config.streamRefreshSeconds);
-		if (!isFinite(seconds) || seconds <= 0) return;
-		if (this._refreshTimer) return;
-		const intervalMs = Math.max(5, seconds) * 1000;
-		this._refreshTimer = setInterval(() => this._refreshStreamIfOn(), intervalMs);
+	_ensureKeeper () {
+		if (this.keeper) return this.keeper;
+		const self = this;
+		this.keeper = new StreamKeeper({
+			streamUrl: () => self._url(`/cam/${self._camId()}/stream.mjpg`),
+			statusProvider: () => self.status,
+			alt: `Live ${this.config.camId} camera feed`,
+			className: "securitylux-stream",
+			// The hub is on a different origin from MagicMirror, so the pixel
+			// watchdog needs CORS to read frames back. The hub sends
+			// Access-Control-Allow-Origin: * on every response.
+			crossOrigin: true,
+			options: {
+				stallTimeoutMs: this.config.stallTimeoutMs,
+				reconnectBackoffMs: this.config.reconnectBackoffMs
+			},
+			logger: {
+				info: (m) => Log.info(`[MMM-SecurityLuxDisplay] ${m}`),
+				warn: (m) => Log.warn(`[MMM-SecurityLuxDisplay] ${m}`)
+			}
+		});
+		return this.keeper;
 	},
 
-	_stopRefreshTimer () {
-		if (this._refreshTimer) {
-			clearInterval(this._refreshTimer);
-			this._refreshTimer = null;
-		}
-	},
-
-	_refreshStreamIfOn () {
-		if (this.cameraState !== "on") return;
-		if (!this.status || !this.status.connected) return;
-		this._refreshStreamSrc();
-		this.updateDom();
-	},
-
-	/**
-	 * Bump the stream nonce AND explicitly null out the live <img> src first.
-	 *
-	 * Browsers don't reliably abort the underlying TCP for a multipart MJPEG
-	 * response when src changes via morphdom — the connection sticks around
-	 * "loading forever" and counts against the per-origin connection cap (~6).
-	 * Setting src="" first forces the browser to abort the previous fetch.
-	 */
-	_refreshStreamSrc () {
-		const wrapper = document.getElementById(this.identifier);
-		const oldImg = wrapper && wrapper.querySelector(".securitylux-stream");
-		if (oldImg && oldImg.src) {
-			try { oldImg.src = ""; } catch (_) { /* ignore */ }
-		}
-		this.streamNonce = Date.now();
+	_syncKeeper () {
+		const shouldStream = !!(this.status && this.status.connected && this.cameraState === "on");
+		this._ensureKeeper().setActive(shouldStream);
 	},
 
 	/* ---- toggle ---- */
@@ -210,27 +213,26 @@ Module.register("MMM-SecurityLuxDisplay", {
 	async requestToggle (desired) {
 		this.inFlightToggle = true;
 		this.updateDom();
-		const url = `${this._hubBase()}/cam/${encodeURIComponent(this.config.camId)}/toggle`;
 		const body = (desired === "on" || desired === "off")
 			? JSON.stringify({ state: desired })
 			: undefined;
 		try {
-			const res = await fetch(url, {
+			const res = await fetch(this._url(`/cam/${this._camId()}/toggle`), {
 				method: "POST",
 				headers: body ? { "Content-Type": "application/json" } : undefined,
 				body
 			});
 			if (!res.ok) throw new Error("HTTP " + res.status);
-			// The next poll will reflect the new state. Force one immediately
-			// so the UI feels snappy.
-			this._scheduleNextPoll(0);
-		} catch (err) {
+			this._stopTimers();
+			this._pollStatus();       // reflect the new state immediately
+			this._pollLastEvent();
+		} catch (_) {
 			this.inFlightToggle = false;
 			this.updateDom();
 		}
 	},
 
-	/* ---- DOM render ---- */
+	/* ---- render ---- */
 
 	getDom () {
 		const wrap = document.createElement("div");
@@ -257,29 +259,33 @@ Module.register("MMM-SecurityLuxDisplay", {
 		wrap.appendChild(frame);
 
 		if (this.config.showStatusBar) wrap.appendChild(this.renderStatusBar());
+		if (this.config.showLastEvent) {
+			const event = this.renderLastEvent();
+			if (event) wrap.appendChild(event);
+		}
 		if (this.config.showToggleButton) wrap.appendChild(this.renderToggleButton());
 
 		return wrap;
 	},
 
+	/**
+	 * Return StreamKeeper's wrapper when streaming.
+	 *
+	 * This node is stable across renders and StreamKeeper owns everything
+	 * inside it, which is precisely what keeps morphdom from interfering with
+	 * the live connection.
+	 */
 	renderVideoChild () {
-		const s = this.status;
-		if (this.cameraState === "on" && s && s.connected) {
-			const img = document.createElement("img");
-			img.className = "securitylux-stream";
-			img.alt = `Live ${this.config.camId} camera feed`;
-			img.src = this._streamUrl();
-			img.addEventListener("error", () => {
-				const retryMs = Math.max(250, Number(this.config.errorRetryMs) || 1500);
-				setTimeout(() => this._refreshStreamIfOn(), retryMs);
-			});
-			return img;
+		const status = this.status;
+		if (this.cameraState === "on" && status && status.connected) {
+			return this._ensureKeeper().element;
 		}
+
 		const placeholder = document.createElement("div");
 		placeholder.className = "securitylux-placeholder";
-		if (!s) {
+		if (!status) {
 			placeholder.textContent = "Connecting to hub…";
-		} else if (s.connected === false) {
+		} else if (status.connected === false) {
 			placeholder.classList.add("securitylux-placeholder-error");
 			placeholder.textContent = `Camera "${this.config.camId}" offline`;
 		} else {
@@ -289,16 +295,18 @@ Module.register("MMM-SecurityLuxDisplay", {
 	},
 
 	/**
-	 * Translucent bbox overlay drawn on top of the live MJPEG <img>.
-	 * `current_detection.bbox` is normalized 0-1 cx/cy/w/h from the hub —
-	 * we convert to CSS percentages and let the overlay scale with whatever
-	 * size the module ends up rendering at.
+	 * Translucent bbox drawn over the live feed. `current_detection.bbox` is
+	 * normalized 0-1 from the hub, converted to CSS percentages so it scales
+	 * with whatever size the module renders at.
 	 */
 	renderBboxOverlay () {
 		if (this.cameraState !== "on") return null;
-		const s = this.status;
-		if (!s || !s.connected || !s.current_detection || !s.current_detection.bbox) return null;
-		const { cx, cy, w, h } = s.current_detection.bbox;
+		const status = this.status;
+		if (!status || !status.connected) return null;
+		const detection = status.current_detection;
+		if (!detection || !detection.bbox) return null;
+
+		const { cx, cy, w, h } = detection.bbox;
 		if (![cx, cy, w, h].every((n) => typeof n === "number" && isFinite(n))) return null;
 
 		const layer = document.createElement("div");
@@ -306,19 +314,17 @@ Module.register("MMM-SecurityLuxDisplay", {
 
 		const box = document.createElement("div");
 		box.className = "securitylux-bbox";
-		const left = Math.max(0, (cx - w / 2)) * 100;
-		const top = Math.max(0, (cy - h / 2)) * 100;
-		const widthPct = Math.min(100 - left, w * 100);
-		const heightPct = Math.min(100 - top, h * 100);
+		const left = Math.max(0, cx - w / 2) * 100;
+		const top = Math.max(0, cy - h / 2) * 100;
 		box.style.left = `${left}%`;
 		box.style.top = `${top}%`;
-		box.style.width = `${widthPct}%`;
-		box.style.height = `${heightPct}%`;
+		box.style.width = `${Math.min(100 - left, w * 100)}%`;
+		box.style.height = `${Math.min(100 - top, h * 100)}%`;
 
 		const label = document.createElement("span");
 		label.className = "securitylux-bbox-label";
-		const conf = Math.round((s.current_detection.confidence || 0) * 100);
-		const cls = s.current_detection.class || "object";
+		const conf = Math.round((detection.confidence || 0) * 100);
+		const cls = detection.class || "object";
 		label.textContent = conf > 0 ? `${cls} ${conf}%` : cls;
 		box.appendChild(label);
 
@@ -329,43 +335,91 @@ Module.register("MMM-SecurityLuxDisplay", {
 	renderStatusBar () {
 		const bar = document.createElement("div");
 		bar.className = "securitylux-status";
-		const s = this.status || {};
+		const status = this.status || {};
 
 		const left = document.createElement("div");
 		left.className = "securitylux-status-left";
-		if (s.current_detection) {
+		if (status.current_detection) {
 			const chip = document.createElement("span");
 			chip.className = "securitylux-event-chip";
-			const cls = s.current_detection.class || "object";
-			chip.textContent = `${cls.charAt(0).toUpperCase() + cls.slice(1)} detected`;
+			const behavior = status.behavior && status.behavior !== "idle"
+				? status.behavior
+				: (status.current_detection.class || "person");
+			chip.textContent = behavior.charAt(0).toUpperCase() + behavior.slice(1);
 			left.appendChild(chip);
 		}
 
 		const right = document.createElement("div");
 		right.className = "securitylux-status-right";
-		if (s.state) {
+		if (status.state) {
 			const state = document.createElement("span");
 			state.className = "securitylux-state";
-			state.textContent = s.state.toUpperCase();
+			state.textContent = String(status.state).toUpperCase();
 			right.appendChild(state);
 		}
-		if (typeof s.battery_pct === "number" && isFinite(s.battery_pct)) {
+		if (typeof status.battery_pct === "number" && isFinite(status.battery_pct)) {
 			const battery = document.createElement("span");
 			battery.className = "securitylux-battery";
-			const pct = Math.round(s.battery_pct);
-			battery.textContent = s.on_battery === false ? `${pct}% ⚡` : `${pct}%`;
+			const pct = Math.round(status.battery_pct);
+			battery.textContent = status.on_battery === false ? `${pct}% ⚡` : `${pct}%`;
 			right.appendChild(battery);
 		}
-		if (s.connected === false) {
-			const off = document.createElement("span");
-			off.className = "securitylux-state securitylux-state-offline";
-			off.textContent = "OFFLINE";
-			right.appendChild(off);
+		if (status.connected === false) {
+			const offline = document.createElement("span");
+			offline.className = "securitylux-state securitylux-state-offline";
+			offline.textContent = "OFFLINE";
+			right.appendChild(offline);
 		}
 
 		bar.appendChild(left);
 		bar.appendChild(right);
 		return bar;
+	},
+
+	/**
+	 * The most recent event, in plain English with a relative timestamp.
+	 * "Someone approached the trash room door · 4 min ago".
+	 */
+	renderLastEvent () {
+		const event = this.lastEvent;
+		if (!event || !event.started_at_ms) return null;
+
+		const maxAge = Number(this.config.lastEventMaxAgeMinutes);
+		if (isFinite(maxAge) && maxAge > 0) {
+			if (Date.now() - event.started_at_ms > maxAge * 60000) return null;
+		}
+
+		const row = document.createElement("div");
+		row.className = "securitylux-last-event";
+		if (event.behavior === "loitering" || event.behavior === "dwelling") {
+			row.classList.add("securitylux-last-event-alert");
+		}
+
+		if (this.config.showLastEventThumbnail && event.thumb_path) {
+			const thumb = document.createElement("img");
+			thumb.className = "securitylux-last-event-thumb";
+			thumb.src = this._url(`/events/${event.id}/thumb.jpg`);
+			thumb.alt = "";
+			row.appendChild(thumb);
+		}
+
+		const body = document.createElement("div");
+		body.className = "securitylux-last-event-body";
+
+		const text = document.createElement("div");
+		text.className = "securitylux-last-event-text";
+		text.textContent = event.description
+			|| `${(event.type || "event").replace(/_/g, " ")} detected`;
+		body.appendChild(text);
+
+		const time = document.createElement("div");
+		time.className = "securitylux-last-event-time";
+		time.textContent = formatRelative(event.started_at_ms);
+		time.title = new Date(event.started_at_ms).toLocaleString();
+		body.appendChild(time);
+
+		row.appendChild(body);
+		return row;
 	},
 
 	renderToggleButton () {
@@ -376,10 +430,8 @@ Module.register("MMM-SecurityLuxDisplay", {
 		if (!connected) {
 			btn.textContent = "Unavailable";
 			btn.disabled = true;
-		} else if (this.cameraState === "on") {
-			btn.textContent = "Turn OFF";
 		} else {
-			btn.textContent = "Turn ON";
+			btn.textContent = this.cameraState === "on" ? "Turn OFF" : "Turn ON";
 		}
 		if (this.inFlightToggle) btn.disabled = true;
 		btn.addEventListener("click", () => this.requestToggle());
@@ -388,12 +440,36 @@ Module.register("MMM-SecurityLuxDisplay", {
 
 	/* ---- helpers ---- */
 
-	_hubBase () {
-		return (this.config.hubUrl || "").replace(/\/+$/, "");
+	_url (path) {
+		return `${(this.config.hubUrl || "").replace(/\/+$/, "")}${path}`;
 	},
 
-	_streamUrl () {
-		const id = encodeURIComponent(this.config.camId);
-		return `${this._hubBase()}/cam/${id}/stream.mjpg?t=${this.streamNonce}`;
+	_camId () {
+		return encodeURIComponent(this.config.camId);
 	}
 });
+
+function detectionEqual (a, b) {
+	if (a === b) return true;
+	if (!a || !b) return false;
+	if (a.class !== b.class) return false;
+	if (Math.abs((a.confidence || 0) - (b.confidence || 0)) > 0.01) return false;
+	const ab = a.bbox || {};
+	const bb = b.bbox || {};
+	const eps = 0.005;   // 0.5% of the frame; below that is invisible at 320px
+	return Math.abs((ab.cx || 0) - (bb.cx || 0)) < eps
+		&& Math.abs((ab.cy || 0) - (bb.cy || 0)) < eps
+		&& Math.abs((ab.w || 0) - (bb.w || 0)) < eps
+		&& Math.abs((ab.h || 0) - (bb.h || 0)) < eps;
+}
+
+function formatRelative (ms) {
+	const delta = Date.now() - ms;
+	if (delta < 45000) return "just now";
+	const minutes = Math.round(delta / 60000);
+	if (minutes < 60) return `${minutes} min ago`;
+	const hours = Math.round(minutes / 60);
+	if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+	const days = Math.round(hours / 24);
+	return `${days} day${days === 1 ? "" : "s"} ago`;
+}

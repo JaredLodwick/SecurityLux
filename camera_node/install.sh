@@ -151,16 +151,30 @@ WorkingDirectory=$INSTALL_DIR
 ExecStart=$VENV_DIR/bin/python -m camera_node
 Environment=CAMERA_NODE_CONFIG=$SYSTEM_CONFIG_FILE
 
-# Auto-restart on crash, with a small backoff so we don't hammer the CPU
-# when the install is fundamentally broken (e.g. webcam unplugged).
-Restart=on-failure
+# Restart=always, not on-failure: the hub's "restart camera" button works by
+# asking the publisher to exit cleanly (code 0), and on-failure would leave it
+# stopped. StartLimit* keeps a fundamentally broken install (webcam unplugged,
+# bad config) from hot-looping forever.
+Restart=always
 RestartSec=3
+StartLimitIntervalSec=60
+StartLimitBurst=10
 
-# Light hardening. ProtectHome is intentionally off so installs under the
-# user's home dir keep working (the venv may live in $TARGET_HOME).
-NoNewPrivileges=true
+# Light hardening. Two deliberate exceptions:
+#
+#   ProtectHome is off so installs under the user's home dir keep working
+#   (the venv may live in $TARGET_HOME).
+#
+#   NoNewPrivileges is off because it blocks sudo outright, which would break
+#   the hub's remote-reboot command. The privilege granted is exactly two
+#   commands via /etc/sudoers.d/securitylux-camera-node — see below.
+NoNewPrivileges=false
 PrivateTmp=true
 ProtectSystem=full
+
+# SPI access for the optional NeoPixel door light. Harmless when no strip is
+# attached; without it the light silently fails to initialise.
+SupplementaryGroups=spi gpio
 
 StandardOutput=journal
 StandardError=journal
@@ -168,6 +182,45 @@ StandardError=journal
 [Install]
 WantedBy=multi-user.target
 EOF
+
+#--- 5b. sudoers rule for remote reboot ----------------------------------------
+#
+# The hub's "reboot camera" button needs the service to be able to reboot the
+# Pi. Rather than blanket NOPASSWD, this grants exactly two commands and
+# nothing else. `visudo -c` validates before install, because a malformed
+# sudoers file can lock you out of sudo entirely.
+
+SUDOERS_FILE=/etc/sudoers.d/securitylux-camera-node
+echo "==> Installing scoped sudoers rule for remote reboot..."
+SUDOERS_TMP="$(mktemp)"
+cat > "$SUDOERS_TMP" <<EOF
+# Installed by SecurityLux camera_node/install.sh
+# Allows the camera node to reboot this Pi when the hub asks, and nothing else.
+$TARGET_USER ALL=(root) NOPASSWD: /usr/bin/systemctl reboot
+$TARGET_USER ALL=(root) NOPASSWD: /sbin/reboot
+EOF
+chmod 440 "$SUDOERS_TMP"
+if visudo -c -f "$SUDOERS_TMP" >/dev/null 2>&1; then
+    install -m 440 -o root -g root "$SUDOERS_TMP" "$SUDOERS_FILE"
+    echo "    Installed $SUDOERS_FILE"
+else
+    echo "    WARNING: generated sudoers rule failed validation; skipping." >&2
+    echo "             Remote reboot will not work. Remote restart still will." >&2
+fi
+rm -f "$SUDOERS_TMP"
+
+#--- 5c. SPI for the optional door light ---------------------------------------
+
+if [[ -e /dev/spidev0.0 ]]; then
+    echo "==> SPI is enabled (/dev/spidev0.0 present) — the door light can be used."
+else
+    echo "==> NOTE: SPI is not enabled, so the NeoPixel door light won't work."
+    echo "          Enable it with: sudo raspi-config > Interface Options > SPI"
+    echo "          Then add 'core_freq_min=500' to /boot/firmware/config.txt so"
+    echo "          CPU scaling can't drift the SPI clock and corrupt LED timing."
+    echo "          Finally: pip install -r requirements-led.txt"
+    echo "          (Skip all of this if you have no LED strip.)"
+fi
 
 #--- 6. enable + start ---------------------------------------------------------
 

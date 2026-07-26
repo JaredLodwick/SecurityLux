@@ -115,34 +115,146 @@ test("Store: deleteSession drops the row", () => {
     }
 });
 
-test("Store: retentionSweep removes old rows + clip files", () => {
+test("Store: retention helpers select the right rows", () => {
+    // The sweep itself moved to storage.js; the store just supplies the
+    // candidate rows and the pruning primitives.
     const { path: dbPath, dir } = tmpDb();
-    const clipsRoot = path.join(dir, "clips");
     try {
         const store = new Store({ dbPath, logger: silentLog }).open();
         const now = Date.now();
-        const oldRel = "2020-01-01/01-00-00_front_person.mkv";
-        const newRel = new Date().toISOString().slice(0, 10) + "/01-00-00_front_person.mkv";
-        fs.mkdirSync(path.join(clipsRoot, path.dirname(oldRel)), { recursive: true });
-        fs.mkdirSync(path.join(clipsRoot, path.dirname(newRel)), { recursive: true });
-        fs.writeFileSync(path.join(clipsRoot, oldRel), "old");
-        fs.writeFileSync(path.join(clipsRoot, newRel), "new");
 
-        const oldId = store.insertSession({ camId: "front", type: "person", startedAtMs: now - 30 * 86400_000 });
-        store.finalizeSession({ id: oldId, endedAtMs: now - 30 * 86400_000 + 2000, detectionCount: 3, maxConfidence: 0.8, clipPath: oldRel });
+        const oldId = store.insertSession({
+            camId: "front", type: "person", startedAtMs: now - 30 * 86400_000
+        });
+        store.finalizeSession({
+            id: oldId, endedAtMs: now - 30 * 86400_000 + 2000,
+            detectionCount: 3, maxConfidence: 0.8,
+            clipPath: "2020-01-01/01-00-00_front_person.mp4", clipBytes: 5000
+        });
 
-        const newId = store.insertSession({ camId: "front", type: "person", startedAtMs: now - 60_000 });
-        store.finalizeSession({ id: newId, endedAtMs: now, detectionCount: 5, maxConfidence: 0.7, clipPath: newRel });
+        const newId = store.insertSession({
+            camId: "front", type: "person", startedAtMs: now - 60_000
+        });
+        store.finalizeSession({
+            id: newId, endedAtMs: now, detectionCount: 5, maxConfidence: 0.7,
+            clipPath: "2026-01-01/01-00-00_front_person.mp4", clipBytes: 7000
+        });
 
-        const result = store.retentionSweep({ retentionDays: 14, clipsRoot });
-        assert.equal(result.rowsDeleted, 1);
-        assert.equal(result.clipsDeleted, 1);
+        const cutoff = now - 14 * 86400_000;
+        const stale = store.eventsOlderThan(cutoff);
+        assert.equal(stale.length, 1);
+        assert.equal(stale[0].id, oldId);
 
-        // Old row + clip gone, new ones survive.
+        assert.equal(store.sumClipBytes(), 12000);
+        assert.equal(store.clipsOldestFirst()[0].id, oldId, "oldest is reclaimed first");
+
+        assert.equal(store.deleteEventsOlderThan(cutoff), 1);
         assert.equal(store.getEvent(oldId), null);
         assert.ok(store.getEvent(newId));
-        assert.ok(!fs.existsSync(path.join(clipsRoot, oldRel)));
-        assert.ok(fs.existsSync(path.join(clipsRoot, newRel)));
+
+        store.close();
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});
+
+test("Store: pruning a clip keeps the event row", () => {
+    // Losing footage from six weeks ago is acceptable; losing the record that
+    // anything happened is not.
+    const { path: dbPath, dir } = tmpDb();
+    try {
+        const store = new Store({ dbPath, logger: silentLog }).open();
+        const id = store.insertSession({ camId: "front", type: "person", startedAtMs: Date.now() });
+        store.finalizeSession({
+            id, endedAtMs: Date.now() + 3000, detectionCount: 2, maxConfidence: 0.8,
+            clipPath: "d/clip.mp4", clipBytes: 9000, description: "Someone was at the front door."
+        });
+
+        store.markClipPruned(id);
+        const event = store.getEvent(id);
+
+        assert.ok(event, "the row survives");
+        assert.equal(event.clip_pruned, true);
+        assert.equal(event.clip_path, null, "the API stops advertising a file that is gone");
+        assert.equal(event.description, "Someone was at the front door.", "history is preserved");
+        assert.equal(store.sumClipBytes(), 0);
+        assert.equal(store.clipsOldestFirst().length, 0, "not offered for pruning twice");
+
+        store.close();
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});
+
+test("Store: settings, zones and profiles round trip", () => {
+    const { path: dbPath, dir } = tmpDb();
+    try {
+        const store = new Store({ dbPath, logger: silentLog }).open();
+
+        store.putSetting("global", "recording.codec", "h264");
+        store.putSetting("front", "led.enabled", true);
+        const settings = store.allSettings();
+        assert.equal(settings.length, 2);
+        assert.ok(settings.some((s) => s.scope === "front" && s.value === true));
+
+        store.putSetting("global", "recording.codec", "mkv");
+        assert.equal(store.allSettings().length, 2, "upsert, not duplicate");
+
+        const zones = store.replaceZones("front", [
+            { name: "trash room door", kind: "door", points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }] }
+        ]);
+        assert.equal(zones.length, 1);
+        assert.equal(zones[0].points.length, 3);
+        store.replaceZones("front", []);
+        assert.equal(store.listZones("front").length, 0);
+
+        const profile = store.createProfile({ name: "Jared", clearance: 3 });
+        assert.equal(profile.name, "Jared");
+        store.addFaceSample({ profileId: profile.id, imagePath: "faces/1/a.jpg", source: "upload" });
+        assert.equal(store.getProfile(profile.id).sample_count, 1);
+
+        store.deleteProfile(profile.id);
+        assert.equal(store.getProfile(profile.id), null);
+        assert.equal(store.listFaceSamples(profile.id).length, 0, "samples cascade");
+
+        store.close();
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});
+
+test("Store: migrates an existing v1 database in place", () => {
+    // An installed hub upgrading must not need its events.db wiped.
+    const { path: dbPath, dir } = tmpDb();
+    try {
+        const Database = require("better-sqlite3");
+        const db = new Database(dbPath);
+        db.exec(`
+            CREATE TABLE events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                cam_id TEXT NOT NULL, type TEXT NOT NULL,
+                started_at_ms INTEGER NOT NULL, ended_at_ms INTEGER,
+                duration_ms INTEGER, detection_count INTEGER NOT NULL DEFAULT 0,
+                max_confidence REAL, clip_path TEXT, metadata_json TEXT
+            );
+        `);
+        db.prepare(
+            "INSERT INTO events (cam_id, type, started_at_ms, ended_at_ms, duration_ms) VALUES (?,?,?,?,?)"
+        ).run("front", "person", 1000, 5000, 4000);
+        db.pragma("user_version = 1");
+        db.close();
+
+        const store = new Store({ dbPath, logger: silentLog }).open();
+        const events = store.queryEvents({});
+
+        assert.equal(events.length, 1, "the pre-existing event survives");
+        assert.equal(events[0].cam_id, "front");
+        assert.equal(events[0].description, null, "new columns exist and default to null");
+        assert.equal(events[0].clip_pruned, false);
+
+        // New tables from later migrations are usable.
+        store.putSetting("global", "recording.crf", 24);
+        assert.equal(store.allSettings().length, 1);
 
         store.close();
     } finally {

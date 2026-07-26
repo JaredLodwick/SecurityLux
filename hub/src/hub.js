@@ -28,23 +28,25 @@ const DEFAULT_CONFIG_PATHS = [
     "/etc/security-lux-hub/config.yml"
 ];
 
+/**
+ * Bootstrap-only defaults.
+ *
+ * Deliberately narrow: these are the settings that must be known *before* the
+ * database exists — where to listen, where the database lives, which model to
+ * download. Everything else (recording, retention, detection tuning, LED,
+ * zones) is declared once in `settings.js` and resolved through the layering
+ * defaults -> config.yml -> DB -> per-camera.
+ *
+ * Duplicating those defaults here as well would create two sources of truth
+ * that drift, and the file copy would silently win over the schema's.
+ */
 const DEFAULT_CONFIG = {
     hub: { port: 5000, bindAddr: "0.0.0.0" },
     detection: {
         enabled: false,
-        fps: 2,
-        confidence: 0.45,
         classes: ["person"],
         modelUrl: "https://github.com/JaredLodwick/SecurityLux/releases/download/models-v1/yolov8n-int8.onnx",
         modelSha256: ""
-    },
-    recording: {
-        codec: "mkv",
-        fps: 15,
-        minClipSeconds: 2,
-        maxClipSeconds: 300,
-        graceMs: 1500,
-        retentionDays: 14
     },
     storage: {
         clipsRoot: "~/Videos/SecurityLux",

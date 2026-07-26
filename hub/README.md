@@ -160,31 +160,125 @@ for the events dashboard. Config search order:
 
 ## HTTP endpoints
 
+### Cameras
+
 | Method | Path | Purpose |
 |---|---|---|
-| `GET`  | `/`                                | The events dashboard (single self-contained HTML page). |
-| `GET`  | `/healthz`                         | Plain `ok`. |
-| `GET`  | `/cams`                            | JSON list of registered cameras + last-known status. |
-| `GET`  | `/cam/<id>/status`                 | Status for one camera (state, connected, fps, battery, current_detection, …). |
-| `GET`  | `/cam/<id>/stream.mjpg`            | Multipart MJPEG stream of the buffered frames. |
-| `POST` | `/cam/<id>/toggle`                 | Body `{"state":"on"\|"off"}` to set; no body to flip. |
-| `POST` | `/cam/<id>/detection`              | Body `{"enabled": bool}` — per-camera detection mute. The hub-wide `/detection` endpoint controls whether the detector worker runs at all; this finer-grained gate just hides one camera's frames from inference. |
-| `GET`  | `/cam/<id>/events?since=&limit=`   | Detection events list (paginated, newest first). |
-| `GET`  | `/events/<id>`                     | Single event JSON. |
-| `GET`  | `/events/<id>/clip.<ext>`          | Streams the recorded clip with `Range` support. |
-| `GET`  | `/detection`                       | `{ enabled, available, error }`. |
-| `POST` | `/detection`                       | Body `{"enabled": bool}` to start/stop the detector at runtime. |
+| `GET`  | `/`                       | The dashboard. |
+| `GET`  | `/healthz`                | Plain `ok`. |
+| `GET`  | `/cams`                   | Every registered camera + last-known status. |
+| `GET`  | `/cam/<id>/status`        | One camera: state, connected, fps, battery, current_detection, behavior, led_stage, uptime, reconnects. |
+| `GET`  | `/cam/<id>/stream.mjpg`   | Multipart MJPEG of the buffered frames. |
+| `GET`  | `/cam/<id>/snapshot.jpg`  | Newest buffered frame as a single JPEG. Used by the zone editor and as a fallback when a stream can't be opened. |
+| `POST` | `/cam/<id>/toggle`        | Body `{"state":"on"\|"off"}` to set; no body to flip. |
+| `POST` | `/cam/<id>/detection`     | Body `{"enabled": bool}` — per-camera detection mute. The hub-wide `/detection` controls whether the detector worker runs at all; this just hides one camera's frames from inference. |
+| `POST` | `/cam/<id>/restart`       | Restart the camera's publisher service (~2 s). |
+| `POST` | `/cam/<id>/reboot`        | Reboot the camera Pi (~40 s; needs the installer's sudoers rule). |
+| `POST` | `/cam/<id>/led/test`      | Body `{"stage": 0-4}` — fire a door-light pattern to check wiring. |
+| `GET`/`PUT` | `/cam/<id>/settings` | Per-camera setting overrides. `PUT` a key to `null` to clear it and go back to inheriting. |
+| `GET`/`PUT` | `/cam/<id>/zones`    | Named zones. `PUT` replaces the whole set. |
 
-CORS is wide-open — designed for a trusted LAN. Do **not** expose port 5000
-to the public internet without sticking auth + TLS in front of it.
+### Events
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET`  | `/events`                 | Filterable list. Params: `cam`, `since`, `until`, `type`, `behavior`, `profile`, `clips`, `limit`, `offset`. |
+| `GET`  | `/cam/<id>/events`        | The same, scoped to one camera. |
+| `GET`  | `/events/latest?cam=<id>` | Most recent event — what the mirror module displays. |
+| `GET`  | `/events/<id>`            | One event. |
+| `GET`  | `/events/<id>/clip.<ext>` | The clip, with `Range` support. |
+| `GET`  | `/events/<id>/thumb.jpg`  | The event thumbnail. |
+| `POST` | `/events/<id>/redescribe` | Rewrite the description from the current zones. |
+| `POST` | `/events/redescribe`      | Body `{"cam": "front"}` — rewrite in bulk after renaming zones. |
+| `DELETE` | `/events/<id>`          | Delete the event and its files. |
+
+### Settings, storage, detection, profiles
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET`  | `/settings/schema`        | Every setting's type, bounds, label, and help text. The dashboard renders its controls from this, so the UI can't offer a value the hub rejects. |
+| `GET`/`PUT` | `/settings`          | Hub-wide settings. A `PUT` is all-or-nothing. |
+| `GET`  | `/detection`              | `{ enabled, available, error, stats, recording_paused, clock_ok }`. |
+| `POST` | `/detection`              | Body `{"enabled": bool}` to start/stop the detector at runtime. |
+| `GET`  | `/storage`                | Usage, limits, per-camera breakdown, projected runway. |
+| `POST` | `/storage/prune`          | Run the retention sweep now. |
+| `POST` | `/storage/backup`         | Write a dated `events.db` copy. |
+| `GET`/`POST` | `/profiles`         | List / create profiles. |
+| `GET`/`PATCH`/`DELETE` | `/profiles/<id>` | One profile. |
+| `GET`/`POST` | `/profiles/<id>/samples` | Face samples. `POST` `{eventId}` to enrol from an event thumbnail, or `{imageBase64}` to upload. |
+| `DELETE` | `/profiles/<id>/samples/<sid>` | Remove a sample. |
+| `GET`  | `/recognition`            | Face-recognition availability (currently always unavailable — see below). |
+
+CORS is wide-open — designed for a trusted LAN. The wildcard is also what
+lets a browser on another host read MJPEG pixels back for the stream stall
+detector. Do **not** expose port 5000 to the public internet without
+putting auth + TLS in front of it.
 
 ## WebSocket (camera ↔ hub)
 
 `ws://<hub>:5000/cam/<cam_id>` — one connection per camera node.
 
-- **camera → hub (binary):** a JPEG frame. Last-writer-wins.
-- **camera → hub (text JSON):** `{"type":"hello", "cam_id", "capabilities":{...}}` once on connect, then `{"type":"status", ...}` every ~5 s.
-- **hub → camera (text JSON):** `{"type":"set_state","state":"on"|"off"}` and `{"type":"hello_ack","cam_id":"..."}`.
+**camera → hub**
+- *binary:* a JPEG frame. Last-writer-wins, and pushed into the pre-roll ring buffer.
+- *text:* `{"type":"hello", "cam_id", "capabilities":{...}}` once on connect, then `{"type":"status", ...}` every ~5 s.
+
+**hub → camera**
+- `{"type":"set_state","state":"on"|"off"}` and `{"type":"hello_ack","cam_id":"..."}`
+- `{"type":"led_config","enabled":true,"count":8,"maxBrightness":0.4}`
+- `{"type":"led","stage":3,"pattern":"pulse","color":[255,160,40],"brightness":0.34,"periodMs":1100,"ttlMs":8000}`
+- `{"type":"restart_service"}` / `{"type":"reboot"}`
+
+LED commands carry a TTL and are re-sent at half of it while a stage is
+held. The camera fades to idle if it stops hearing from the hub, so a hub
+crash mid-event leaves the porch dark rather than lit all night.
+
+## Settings
+
+Settings resolve in layers:
+
+```
+built-in defaults  →  config.yml  →  saved in the web UI  →  per-camera override
+```
+
+`config.yml` bootstraps and covers the things that must be known before the
+database exists (bind port, database path, model URL). Everything else —
+recording, retention, detection tuning, LED, zones — is editable at
+`http://<hub>:5000/#/settings` and stored in the database.
+
+A value you changed in the UI wins over the file. If editing `config.yml`
+appears to do nothing, clear the override in the UI to hand control back.
+
+Every setting is declared once in `src/settings.js` with its type, bounds,
+and help text; validation, the API, and the UI controls are all derived
+from that one declaration.
+
+## Storage
+
+Three independent limits, all editable under **Settings → Storage**:
+
+- `storage.retentionDays` (default 14) — delete events older than this.
+- `storage.maxTotalGB` (default 16) — reclaim oldest **video** first when
+  over budget. Event rows survive with `clip_pruned: true`, so you keep the
+  history and lose only the footage.
+- `storage.minFreeGB` (default 4) — a hard floor on the filesystem. Below
+  it the hub prunes aggressively and then stops writing clips while
+  continuing to log events, rather than letting a full disk break SQLite.
+
+The sweep runs every 15 minutes and again after every clip finalizes.
+`events.db` is backed up nightly to `~/.securityluxhub/backups/`, seven
+copies kept — clips are re-recordable, your zones and profiles are not.
+
+## Face recognition
+
+Not active. Profiles, clearances, enrollment, sample storage, and the
+matching maths are all implemented and tested; what's missing is the model
+that turns a face into an embedding. `GET /recognition` reports this, and
+the Profiles page says so plainly rather than implying the hub is silently
+identifying people.
+
+To finish it: publish SCRFD-500m and MobileFaceNet ONNX files to the
+`models-v1` release and implement `Recognizer._embed()` in
+`src/recognize.js`. The header comment there has the full recipe.
 
 ## Tests
 
@@ -194,18 +288,11 @@ npm install
 npm test            # equivalent to: node --test tests/*.test.js
 ```
 
-12 tests covering the SQLite store and the session state machine. The
-detector + recorder are I/O-bound and verified end-to-end on the hub.
-
-## Configuration
-
-See `config.example.yml`. Every key has a built-in default — partial files
-are fine. To toggle detection at runtime without restarting:
-
-```bash
-curl -X POST -H 'Content-Type: application/json' \
-     -d '{"enabled":true}' http://localhost:5000/detection
-```
+111 tests covering the event store and migrations, the session state
+machine, tracking and behaviour classification, zone geometry, the
+description templates, the frame ring buffer, settings resolution and
+validation, and the storage limits. The detector and recorder are I/O-bound
+and verified end-to-end on the hub.
 
 ## See also
 

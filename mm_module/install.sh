@@ -120,6 +120,24 @@ fi
 ln -s "$SOURCE_DIR" "$TARGET_LINK"
 echo "linked: $TARGET_LINK -> $SOURCE_DIR"
 
+# Keep the module's copy of stream-keeper.js in step with the hub's.
+#
+# The file is deliberately duplicated rather than fetched from the hub: the
+# mirror has to keep rendering (and keep trying to reconnect) when the hub is
+# unreachable, which it couldn't do if its recovery code lived on the hub. But
+# a stale copy means the stream-blackout fix silently regresses on the mirror
+# only, so re-sync on every install.
+HUB_KEEPER="$SCRIPT_DIR/../hub/web/js/stream-keeper.js"
+MODULE_KEEPER="$SOURCE_DIR/stream-keeper.js"
+if [[ -f "$HUB_KEEPER" ]]; then
+    if ! cmp -s "$HUB_KEEPER" "$MODULE_KEEPER" 2>/dev/null; then
+        cp "$HUB_KEEPER" "$MODULE_KEEPER"
+        echo "synced: stream-keeper.js from hub/web/js/"
+    fi
+else
+    echo "WARNING: $HUB_KEEPER not found; using the module's bundled stream-keeper.js." >&2
+fi
+
 if [[ ! -f "$CONFIG_FILE" ]]; then
     if [[ -f "$CONFIG_SAMPLE" ]]; then
         echo "==> Creating $CONFIG_FILE from config.js.sample..."
