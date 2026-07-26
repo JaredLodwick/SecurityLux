@@ -100,11 +100,19 @@ UI for the system.
   hub. No special client software needed.
 - **Detection is off by default.** Toggle it via the dashboard or the
   config file — the hub lazy-downloads the YOLO model on first enable.
-- **Per-event clips** land in `~/Videos/SecurityLux/<YYYY-MM-DD>/…`
-  on the hub host. Old events sweep automatically (default retention 14
-  days).
-- **No internet required.** The system runs entirely on your LAN. The
-  one exception is the first-time YOLO model download (~6 MB).
+- **Per-event clips** land in `~/Videos/SecurityLux/<YYYY-MM-DD>/…` on the
+  hub host, in h264/mp4. Each clip includes ~5 seconds *before* the
+  detection fired and ~5 seconds after, so you see the walk-up and the
+  walk-away rather than opening on someone already in frame.
+- **Storage is bounded three ways** — by age, by a total clip budget, and
+  by a hard floor on free disk. A full card can't take the hub down.
+- **Events are described in plain English.** Draw and name zones on a
+  camera ("trash room door", "driveway") and events read like
+  *"Someone approached the trash room door and stood there for 12
+  seconds."*
+- **No internet required.** The system runs entirely on your LAN — including
+  event descriptions and sunrise/sunset. The one exception is the
+  first-time YOLO model download (~6 MB).
 
 ---
 
@@ -115,8 +123,10 @@ SecurityLux/
 ├── install.sh                            # unified installer; pick a component
 │
 ├── hub/                                  # standalone hub server (Node.js)
-│   ├── src/                              #   server.js, detector.*, store.js, recorder.js, …
-│   ├── web/index.html                    #   self-contained dashboard
+│   ├── src/                              #   server.js, routes.js, detector.*, store.js,
+│   │                                     #   recorder.js, session.js, tracker.js, zones.js,
+│   │                                     #   describe.js, storage.js, settings.js, led.js
+│   ├── web/                              #   dashboard: index.html, css/, js/
 │   ├── tests/                            #   node --test
 │   ├── config.example.yml
 │   └── install.sh
@@ -127,6 +137,7 @@ SecurityLux/
 │   ├── config.example.yml
 │   ├── apt-requirements.txt
 │   ├── requirements.txt
+│   ├── requirements-led.txt              #   optional NeoPixel deps (Pi only)
 │   └── install.sh
 │
 └── mm_module/                            # optional MagicMirror display
@@ -151,9 +162,58 @@ curl http://<hub-host>:5000/healthz       # → ok
 curl http://<hub-host>:5000/cams          # JSON list of registered cameras
 ```
 
-Then open `http://<hub-host>:5000/` for the events dashboard. Walk past a
-connected camera and you should see a new event appear with an inline
-playable clip.
+Then open `http://<hub-host>:5000/` for the dashboard. Walk past a
+connected camera and you should see a new event appear with a thumbnail,
+a plain-English description, and an inline playable clip.
+
+---
+
+## Getting good descriptions
+
+Out of the box an event reads *"Someone was at the front door camera for
+12 seconds."* Correct, but not the interesting version. Two minutes of
+setup fixes that:
+
+1. Open the camera in the dashboard and click **Zones**.
+2. Drag boxes over the things that matter and name them the way you'd say
+   them out loud — `trash room door`, `driveway`, `walkway`. The names are
+   used verbatim, so `trash room door` reads far better than `Zone 2`.
+3. Set the kind: **door** for entrances, **path** for walkways, **area**
+   for anything else, and **ignore** for regions that generate false
+   positives — a swaying branch, a neighbour's lit window, a road with
+   passing cars. Detections inside an `ignore` zone are discarded outright.
+4. Save. You'll be offered the chance to rewrite existing events using the
+   new names, so renaming a zone fixes your history, not just the future.
+
+Events then read like *"Someone walked from the driveway to the trash room
+door."*
+
+A person is judged to be in a zone by **where their feet are**, not their
+middle — so standing close to the camera doesn't put someone in the wrong
+zone.
+
+---
+
+## Storage
+
+The hub records to `~/Videos/SecurityLux/` and bounds it three ways, all
+editable under **Settings → Storage**:
+
+| Limit | Default | What happens |
+|---|---|---|
+| Keep events for | 14 days | Older events and their video are deleted |
+| Clip storage budget | 16 GB | Oldest **video** is reclaimed first; the event rows survive, so you keep the history and lose only the footage |
+| Reserve free disk | 4 GB | A hard floor. Below it the hub prunes hard and, if that isn't enough, stops writing new clips while still logging events |
+
+Recording defaults to h264/mp4, which is roughly **13× smaller** than the
+MJPEG the camera sends (~2 MB/minute instead of ~27 MB/minute) and plays
+natively in every browser including iOS Safari. On a 64 GB card that's the
+difference between about 25 hours of event video and about 330. It costs
+around 10% of one Pi 4 core per camera. If your hub is genuinely
+CPU-starved, `recording.codec: mkv` restores the old zero-CPU stream-copy.
+
+The Storage page shows current usage, a per-camera breakdown, and a
+projected runway at your actual recording rate.
 
 ---
 
@@ -259,10 +319,70 @@ re-installation — just a config tweak.
 
 ### Where do recorded clips go?
 
-`~/Videos/SecurityLux/<YYYY-MM-DD>/<HH-MM-SS>_<cam_id>_person.mkv` on
-the hub host. The events database is at
+`~/Videos/SecurityLux/<YYYY-MM-DD>/<HH-MM-SS>_<cam_id>_person.mp4` on the
+hub host, with a matching `.jpg` thumbnail. The database is at
 `~/.securityluxhub/events.db` (`/etc/security-lux-hub/` on Linux is for
-config; data lives in the user's home).
+config; data lives in the user's home), backed up nightly to
+`~/.securityluxhub/backups/` with seven copies kept.
+
+That database holds your settings, zones, and profiles as well as the
+event log. Clips are re-recordable; those aren't — which is why it's the
+thing that gets backed up.
+
+### My feed goes black after a few minutes. / The feed breaks when I unlock my phone.
+
+Both were real bugs, fixed. The MagicMirror module used to run a blind
+5-minute "refresh" timer that tore down the video connection without
+successfully reopening it, and nothing recovered a stream that died while
+the page was backgrounded.
+
+Streams now reconnect on evidence rather than on a timer: an error, the
+page becoming visible again, restoring from the back/forward cache, or —
+the case nothing else catches — the picture being frozen while the hub
+reports it's still sending fresh frames. That last one is detected by
+sampling the image into a tiny canvas and checksumming it, because a
+wedged decoder fires no events at all.
+
+If you're still seeing it, make sure the MagicMirror module is up to date
+(`./mm_module/install.sh` re-syncs the shared code) and restart
+MagicMirror.
+
+### Can I turn cameras off or reboot them from the dashboard?
+
+Yes. Open a camera and use **Restart** or **Reboot**.
+
+Reach for **Restart** first: it exits the camera's publisher and systemd
+brings it back in about two seconds, which fixes nearly every camera
+problem. **Reboot** restarts the whole Pi and takes about a minute; it
+needs the scoped sudoers rule that `camera_node/install.sh` installs, so
+re-run that installer on the camera if reboot reports a failure.
+
+### What's the LED strip for?
+
+An optional 8-LED NeoPixel wired to a camera Pi lights up when someone is
+at the door, with escalating patterns: a brief cool sweep for someone
+passing, a warm breathe when they're present, a faster amber pulse if they
+stand there, and an amber-red chase if they linger.
+
+Wire the data line to **GPIO10 / MOSI (physical pin 19)** and share a
+ground, enable SPI, then `pip install -r requirements-led.txt` on the Pi
+and turn the light on in that camera's settings. There's a **Test light**
+button so you can check the wiring without standing outside.
+
+SPI is used rather than the more commonly documented PWM pin because it
+doesn't require running the camera service as root and doesn't conflict
+with onboard audio. One caution: eight LEDs at full white draw ~480 mA,
+which is more than the Pi Zero's 5V rail wants to give while a PiSugar is
+charging — brightness is capped at 40% by default for that reason.
+
+### Does it recognise faces?
+
+Not yet. You can create profiles, set clearance levels, and enrol faces
+(including in one click from an event thumbnail), and all of that is
+stored properly. What's missing is the model that turns a face into a
+comparable fingerprint — those files still need publishing. Until then
+events are logged as generic person detections, and the Profiles page says
+so rather than implying otherwise.
 
 ### Does this connect to the internet?
 

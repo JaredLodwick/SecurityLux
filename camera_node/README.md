@@ -25,15 +25,17 @@ root as `PRD.md`.
 ```
 camera_node/
   camera_node/         # the Python package (run via `python -m camera_node`)
-    publisher.py       # WS client: frame pump, status pump, command receive
-    camera.py          # capture thread + real/mock camera (unchanged)
-    state.py           # on/off state machine (unchanged)
+    publisher.py       # WS client: frame pump, status pump, command router
+    camera.py          # capture thread + real/mock camera
+    state.py           # on/off state machine
     config.py          # YAML config loader
     pisugar.py         # TCP client for the PiSugar daemon
+    led.py             # optional NeoPixel door light (SPI)
   tests/               # pytest suite (no hardware required)
   deploy/camera-node.service
   config.example.yml
   requirements.txt
+  requirements-led.txt # optional NeoPixel deps — Pi only
 ```
 
 ## Wire protocol (camera ↔ hub)
@@ -43,12 +45,87 @@ WebSocket `wss?://<hub>/cam/<cam_id>`.
 - **camera → hub (binary)**: a JPEG frame. Last-writer-wins on the hub.
 - **camera → hub (text JSON)**:
   - `{"type":"hello","cam_id":"front","capabilities":{...}}` once on connect.
-  - `{"type":"status","cam_id":"front","state":"on","fps":15,"resolution":"640x480","battery_pct":87.5,"on_battery":true,"camera_available":true}` every ~5s.
+  - `{"type":"status", ..., "battery_pct":87.5, "on_battery":true, "camera_available":true, "led_available":true, "uptime_s":4821}` every ~5s.
 - **hub → camera (text JSON)**:
   - `{"type":"set_state","state":"on"|"off"}` — drives the local state machine.
+  - `{"type":"led_config","enabled":true,"count":8,"maxBrightness":0.4}` — configure the strip.
+  - `{"type":"led","stage":3,"pattern":"pulse","color":[255,160,40],"brightness":0.34,"periodMs":1100,"ttlMs":8000}` — play a stage.
+  - `{"type":"restart_service"}` — exit cleanly so systemd restarts us.
+  - `{"type":"reboot"}` — reboot the Pi.
   - `{"type":"hello_ack","cam_id":"front"}` — informational.
 
 Reconnects use exponential backoff (1s → 30s).
+
+## Remote restart and reboot
+
+The hub can restart the publisher or reboot the Pi from its web UI. Two
+things in the systemd unit make that work, and both are deliberate:
+
+- **`Restart=always`**, not `on-failure`. A restart is implemented as a
+  clean exit; `on-failure` would leave the service stopped.
+- **`NoNewPrivileges=false`.** It otherwise blocks `sudo` outright, which
+  would break reboot. The privilege granted is narrow: the installer writes
+  `/etc/sudoers.d/securitylux-camera-node` allowing exactly
+  `systemctl reboot` and `/sbin/reboot`, nothing else.
+
+If reboot reports a failure from the dashboard, re-run
+`camera_node/install.sh` on that Pi — the sudoers rule is almost certainly
+missing. Restart works regardless and fixes most problems anyway.
+
+## Door light (optional NeoPixel)
+
+An 8-LED WS281x strip lights up when someone is at the door, escalating
+from a brief cool sweep (passing) through a warm breathe (present) and an
+amber pulse (standing there) to an amber-red chase (lingering). The hub
+sends a stage; the animation runs locally at 50 fps so a WiFi hiccup
+produces a smooth fade rather than a stutter.
+
+### Wiring — SPI
+
+```
+NeoPixel DIN  ──►  GPIO10 / MOSI   (physical pin 19)
+NeoPixel GND  ──►  Pi GND          (physical pin 6)   ← common ground is mandatory
+NeoPixel 5V   ──►  5V supply
+```
+
+SPI rather than the more commonly documented PWM pin, for two reasons:
+`rpi_ws281x` on a PWM pin requires **root** (and giving a network-facing
+process root to blink an LED is a bad trade), and GPIO18 — the usual PWM
+choice — conflicts with the Pi's onboard audio.
+
+### Setup
+
+```bash
+sudo raspi-config          # Interface Options → SPI → Yes
+echo 'core_freq_min=500' | sudo tee -a /boot/firmware/config.txt
+sudo reboot
+
+# then, in the camera_node venv:
+pip install -r requirements-led.txt
+```
+
+`core_freq_min=500` matters: the SPI clock tracks the core clock, so CPU
+frequency scaling can otherwise drift the WS2812 bit timing and produce
+flicker or wrong colours.
+
+Finally, enable the light for this camera in the hub's UI (camera →
+**Camera settings** → *Door light*), and use **Test light** to check the
+wiring without standing outside.
+
+### ⚠️ Power
+
+Eight LEDs at full white draw roughly **480 mA**. That is more than the Pi
+Zero's 5V rail wants to supply while a PiSugar is also charging — you'll
+get brownouts and a Pi that reboots under load. Brightness is capped at
+**40%** by default and enforced on the camera as well as the hub, so a bad
+command can't overdraw the rail. If you want it brighter, feed the strip
+from its own 5V supply with a shared ground.
+
+### No strip? Nothing to do.
+
+Every hardware dependency is imported behind a guard. With no strip, no
+SPI, or no Adafruit libraries installed, `led.py` becomes a no-op that logs
+the reason once and the camera keeps streaming exactly as before.
 
 ## Local dev quickstart (no Pi needed)
 
@@ -139,5 +216,8 @@ pip install -r requirements.txt
 pytest
 ```
 
-Tests exercise the config loader, the state machine, and the PiSugar
-parsers/client — no hardware or hub required.
+61 tests exercising the config loader, the state machine, the PiSugar
+parsers/client, and the door light's animation maths and TTL expiry — no
+hardware, no SPI bus, and no hub required. The LED tests deliberately run
+without any Adafruit libraries installed, which is also the check that a
+camera with no strip degrades cleanly.
