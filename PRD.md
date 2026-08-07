@@ -138,6 +138,8 @@ The camera only ever talks to one place (the hub), so security review is simple.
 | F22 | Profiles and clearances | People, clearance levels 0-3, and enrolled face samples. Faces can be added from an event thumbnail in one click. Recognition itself is scaffolded but not active (M9b). |
 | F23 | Nightly database backup | Seven rotating `VACUUM INTO` copies of `events.db`. Clips are re-recordable; zones, settings, and profiles are not. |
 | F24 | Event webhook | Optional outbound POST per finalized event, for ntfy / Home Assistant / a shell script. |
+| F25 | Image framing controls | Rotation (0/90/180/270), horizontal/vertical mirroring, and digital zoom with pan. Applied on the camera before the JPEG encode, so the live feed, the clips, and the detector all see the same corrected image. Short-circuits entirely when unset, so an unadjusted camera pays nothing. |
+| F26 | Hardware image controls | Brightness, contrast, saturation, sharpness, gamma, gain, backlight compensation, exposure, white balance, and anti-flicker — discovered per camera via `v4l2-ctl` and applied by the driver, so they cost zero CPU. Only controls the camera reports are offered, with its real ranges; driver-inactive controls are greyed out. Values are stored on the hub and re-applied on reconnect, because V4L2 state is lost when a camera Pi reboots. |
 
 ## 6. Non-functional requirements
 
@@ -191,6 +193,9 @@ All consumer-facing endpoints live on the **hub** (`meer.local` in these example
 | `POST` | `/cam/<id>/led/test` | Fire a door-light pattern to check wiring |
 | `GET`/`PUT` | `/cam/<id>/settings` | Per-camera setting overrides |
 | `GET`/`PUT` | `/cam/<id>/zones` | Named zones for this camera |
+| `GET`/`PUT` | `/cam/<id>/controls` | Image framing + hardware controls |
+| `POST` | `/cam/<id>/controls/reset` | Restore image defaults |
+| `POST` | `/cam/<id>/controls/refresh` | Re-probe what the camera supports |
 
 **Events**
 
@@ -265,6 +270,8 @@ Endpoint: `ws://meer.local:5000/cam/<cam_id>` — one connection per camera.
 **Hub → camera:**
 - *text JSON* — `{"type":"set_state","state":"on"|"off"}` on connect and on every desired-state change.
 - *text JSON* — `{"type":"hello_ack","cam_id":"front"}` (informational).
+- *text JSON* — `{"type":"image_config","rotation":90,"zoom":2,…}` on connect and on every change; applied to the very next captured frame.
+- *text JSON* — `{"type":"camera_controls","values":{"brightness":20}}`, `{"type":"get_camera_controls"}`, `{"type":"reset_camera_controls"}` for V4L2 controls.
 - *text JSON* — `{"type":"led_config","enabled":true,"count":8,"maxBrightness":0.4}` on connect and whenever LED settings change.
 - *text JSON* — `{"type":"led","stage":3,"pattern":"pulse","color":[255,160,40],"brightness":0.34,"periodMs":1100,"ttlMs":8000}` on every escalation change, and re-sent at half the TTL while a stage is held.
 - *text JSON* — `{"type":"restart_service"}` — the publisher exits cleanly; systemd restarts it.
@@ -543,6 +550,7 @@ Kept out of `requirements.txt` on purpose: `adafruit-blinka` binds to Raspberry 
 | **M15 — Door light** | done | SPI-driven NeoPixel on the camera Pi with five escalating patterns, TTL-based fail-dark, software brightness cap, and a wiring-test button. Degrades to a no-op with no hardware. |
 | **M16 — Remote camera control** | done | Restart and reboot from the UI, scoped sudoers rule, uptime + reconnect count surfaced per camera. |
 | **M17 — Browser-editable settings** | done | Schema-driven settings with per-camera overrides; API and UI generated from one declaration. |
+| **M18 — Image adjustments** | done | Framing (rotation/mirror/zoom/pan) in software on the camera, plus per-camera V4L2 hardware controls discovered at runtime. Live-preview control panel in the dashboard. Applied upstream of the encode so the feed, the clips, and the detector agree; hardware values persisted on the hub and re-applied on reconnect. |
 
 ## 14. Risks & open questions
 

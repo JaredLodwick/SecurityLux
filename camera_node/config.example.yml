@@ -33,6 +33,31 @@ pisugar:
   # Seconds to wait for any PiSugar socket response before giving up.
   timeout_seconds: 1.0
 
+image:
+  # Framing adjustments, applied on this Pi before the JPEG is encoded — so the
+  # live feed, the hub's recordings, and the person detector all see the same
+  # corrected picture.
+  #
+  # These are bootstrap values only. The hub pushes the authoritative settings
+  # on connect, and you normally change them in the web UI (camera →
+  # "Adjust image"), where you get a live preview.
+  #
+  # rotation: 0, 90, 180 or 270, clockwise. 90 and 270 swap width and height.
+  # zoom:     1.0 = full frame, up to 4.0. Digital, so no extra detail — but it
+  #           fills the frame with the part you care about, and the detector
+  #           then sees a larger person.
+  # panX/panY: -1 to 1, which part of the frame to zoom into. No effect at 1x.
+  #
+  # Brightness, contrast and exposure are NOT here: which of those a camera
+  # supports depends entirely on the webcam, so they're detected at runtime
+  # and stored on the hub. Install v4l-utils to enable them.
+  rotation: 0
+  flipHorizontal: false
+  flipVertical: false
+  zoom: 1.0
+  panX: 0.0
+  panY: 0.0
+
 led:
   # Optional WS281x / NeoPixel strip that lights up when someone is at the door.
   #

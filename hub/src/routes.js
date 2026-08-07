@@ -22,6 +22,9 @@ const { describeEvent } = require("./describe");
 
 const WEB_ROOT = path.join(__dirname, "..", "web");
 
+/** Geometry keys, without the `image.` prefix. Used by the reset endpoint. */
+const IMAGE_KEYS = ["rotation", "flipHorizontal", "flipVertical", "zoom", "panX", "panY"];
+
 /**
  * @typedef {object} Ctx
  * @property {import("./server").HubServer} hub
@@ -167,6 +170,83 @@ const ROUTES = [
                     overrides: hub.settings.overrides(camId)
                 });
             });
+        }
+    },
+    // ---- Image controls -----------------------------------------------
+    {
+        method: "GET", pattern: /^\/cam\/([^/]+)\/controls$/,
+        handler: ({ hub, res, params }) => sendJson(res, 200, hub.controlsFor(params[0]))
+    },
+    {
+        // One endpoint for the whole control panel. `image` holds geometry
+        // (schema-backed settings) and `values` holds V4L2 controls (whatever
+        // this particular webcam exposes) — the panel edits both together, so
+        // splitting them across two requests would just mean two round trips
+        // and a half-applied state if the second one failed.
+        method: "PUT", pattern: /^\/cam\/([^/]+)\/controls$/,
+        handler: ({ hub, req, res, params }) => {
+            const camId = params[0];
+            readJsonBody(req, (err, body) => {
+                if (err) return sendError(res, 400, err.message);
+                if (!body || typeof body !== "object") {
+                    return sendError(res, 400, "body must be { image?, values? }");
+                }
+
+                if (body.image && typeof body.image === "object") {
+                    const patch = {};
+                    for (const [key, value] of Object.entries(body.image)) {
+                        // Rotation is an enum of strings in the schema; accept a
+                        // number from the UI without making the caller care.
+                        patch[`image.${key}`] = key === "rotation" ? String(value) : value;
+                    }
+                    const result = hub.settings.set(patch, camId);
+                    if (!result.ok) {
+                        return sendError(res, 400, "invalid image settings", { details: result.errors });
+                    }
+                }
+
+                if (body.values && typeof body.values === "object"
+                    && Object.keys(body.values).length) {
+                    const result = hub.setHardwareControls(camId, body.values);
+                    if (!result.ok) return sendError(res, 400, result.error);
+                }
+
+                return sendJson(res, 200, hub.controlsFor(camId));
+            });
+        }
+    },
+    {
+        method: "POST", pattern: /^\/cam\/([^/]+)\/controls\/reset$/,
+        handler: ({ hub, req, res, params }) => {
+            const camId = params[0];
+            readJsonBody(req, (err, body) => {
+                if (err) return sendError(res, 400, err.message);
+                const scope = (body && body.scope) || "all";
+
+                if (scope === "all" || scope === "image") {
+                    // null clears the override, so the camera falls back to the
+                    // schema default rather than to some other saved value.
+                    const cleared = {};
+                    for (const key of IMAGE_KEYS) cleared[`image.${key}`] = null;
+                    hub.settings.set(cleared, camId);
+                }
+                if (scope === "all" || scope === "hardware") {
+                    const result = hub.resetHardwareControls(camId);
+                    if (!result.ok) return sendError(res, 400, result.error);
+                }
+                return sendJson(res, 200, hub.controlsFor(camId));
+            });
+        }
+    },
+    {
+        // Ask the camera to re-probe. Useful after swapping the webcam, or when
+        // toggling auto-exposure changes which controls are active.
+        method: "POST", pattern: /^\/cam\/([^/]+)\/controls\/refresh$/,
+        handler: ({ hub, res, params }) => {
+            const result = hub.sendCameraCommand(params[0], { type: "get_camera_controls" });
+            return result.ok
+                ? sendJson(res, 202, { ok: true })
+                : sendError(res, 409, result.error);
         }
     },
     {

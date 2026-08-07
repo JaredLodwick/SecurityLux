@@ -24,6 +24,9 @@ from typing import Optional
 import cv2  # type: ignore[import-untyped]
 import numpy as np
 
+from . import imaging
+from .controls import CameraControls
+from .imaging import ImageSettings
 from .state import CameraState, StateValue
 
 log = logging.getLogger(__name__)
@@ -47,7 +50,12 @@ class CameraManager:
         jpeg_bytes = manager.get_latest_jpeg()  # None until first frame ready
     """
 
-    def __init__(self, cfg: CameraConfig, state: CameraState) -> None:
+    def __init__(
+        self,
+        cfg: CameraConfig,
+        state: CameraState,
+        image_settings: Optional[ImageSettings] = None,
+    ) -> None:
         self._cfg = cfg
         self._state = state
 
@@ -61,6 +69,16 @@ class CameraManager:
         # When True, the capture loop is in mock mode (no real device).
         self._using_mock = False
         self._mock_frame_counter = 0
+
+        # Geometry adjustments. Held as an immutable object and swapped
+        # wholesale, so the capture thread always reads a coherent set rather
+        # than catching a half-updated one mid-frame. No lock needed for the
+        # read — rebinding a reference is atomic under the GIL.
+        self._image = image_settings or ImageSettings()
+
+        # Hardware (V4L2) controls. Probed lazily on first use; a camera or host
+        # without v4l2-ctl simply reports no controls.
+        self._controls = CameraControls(cfg.device)
 
         # Hook state transitions so the hardware is released when feed goes off
         # and re-opened when it goes back on.
@@ -98,7 +116,46 @@ class CameraManager:
 
     @property
     def resolution_str(self) -> str:
-        return f"{self._cfg.width}x{self._cfg.height}"
+        """Effective resolution — 90/270 rotation swaps the axes."""
+        width, height = imaging.output_size(
+            self._cfg.width, self._cfg.height, self._image
+        )
+        return f"{width}x{height}"
+
+    # -- image adjustments --------------------------------------------
+
+    @property
+    def image_settings(self) -> ImageSettings:
+        return self._image
+
+    def apply_image_settings(self, msg: dict) -> ImageSettings:
+        """
+        Merge a partial `image_config` payload into the current geometry.
+
+        Takes effect on the very next captured frame — there is no need to
+        reopen the device, which is what makes dragging a slider feel live.
+        """
+        updated = ImageSettings.from_message(msg, base=self._image)
+        if updated != self._image:
+            log.info("Image geometry updated: %s", updated.to_dict())
+        self._image = updated
+        return updated
+
+    def list_hardware_controls(self) -> list[dict]:
+        """Controls this specific camera supports, ready to render as a UI."""
+        return [control.to_dict() for control in self._controls.list_controls()]
+
+    def apply_hardware_controls(self, values: dict) -> dict:
+        """Apply V4L2 controls. Returns `{applied, errors}` per control."""
+        return self._controls.apply(values or {})
+
+    def reset_hardware_controls(self) -> dict:
+        """Restore every hardware control to the driver's own default."""
+        return self._controls.reset()
+
+    @property
+    def hardware_controls_available(self) -> bool:
+        return self._controls.available
 
     # ------------------------------------------------------------------ internals
 
@@ -143,6 +200,13 @@ class CameraManager:
                     # Real device returned nothing — short sleep and retry.
                     time.sleep(0.05)
                     continue
+
+                # Adjustments happen here, before the encode, so the live feed,
+                # the hub's recordings, and the detector all see the same
+                # corrected image. `apply` short-circuits when nothing is set,
+                # so an unadjusted camera pays nothing.
+                frame = imaging.apply(frame, self._image)
+
                 ok, buf = cv2.imencode(
                     ".jpg",
                     frame,

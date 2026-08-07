@@ -94,6 +94,20 @@ async function boot() {
     } };
 }
 
+/**
+ * Controls a stubbed camera reports, mirroring the shape camera_node builds
+ * from `v4l2-ctl --list-ctrls`.
+ */
+const FAKE_CONTROLS = [
+    { id: "brightness", name: "brightness", label: "Brightness", kind: "int",
+      min: -64, max: 64, step: 1, default: 0, value: 0, inactive: false },
+    { id: "contrast", name: "contrast", label: "Contrast", kind: "int",
+      min: 0, max: 64, step: 1, default: 32, value: 32, inactive: false },
+    { id: "auto_exposure", name: "auto_exposure", label: "Auto exposure", kind: "menu",
+      min: 0, max: 3, default: 3, value: 3, inactive: false,
+      options: [{ value: 1, label: "Manual" }, { value: 3, label: "Aperture priority" }] }
+];
+
 /** Connect a fake camera and stream frames until told to stop. */
 async function connectCamera(port, camId) {
     const ws = new WebSocket(`ws://127.0.0.1:${port}/cam/${camId}`);
@@ -113,9 +127,43 @@ async function connectCamera(port, camId) {
     }));
 
     const received = [];
+    // What the stub believes its geometry and V4L2 values currently are, so a
+    // test can assert the hub actually pushed them down the socket.
+    const applied = { image: null, values: {} };
+
     ws.on("message", (data, isBinary) => {
         if (isBinary) return;
-        try { received.push(JSON.parse(data.toString())); } catch (_) { /* ignore */ }
+        let msg;
+        try { msg = JSON.parse(data.toString()); } catch (_) { return; }
+        received.push(msg);
+
+        // Mirror camera_node's replies so the hub's caching path is exercised.
+        if (msg.type === "image_config") {
+            applied.image = {
+                rotation: msg.rotation, flipHorizontal: msg.flipHorizontal,
+                flipVertical: msg.flipVertical, zoom: msg.zoom,
+                panX: msg.panX, panY: msg.panY
+            };
+            const rotated = msg.rotation === 90 || msg.rotation === 270;
+            ws.send(JSON.stringify({
+                type: "image_state", cam_id: camId, image: applied.image,
+                resolution: rotated ? "480x640" : "640x480"
+            }));
+        } else if (msg.type === "camera_controls" || msg.type === "get_camera_controls") {
+            Object.assign(applied.values, msg.values || {});
+            ws.send(JSON.stringify({
+                type: "camera_controls", cam_id: camId,
+                controls: FAKE_CONTROLS, controls_available: true,
+                image: applied.image, resolution: "640x480",
+                applied: msg.values || {}, errors: {}
+            }));
+        } else if (msg.type === "reset_camera_controls") {
+            applied.values = {};
+            ws.send(JSON.stringify({
+                type: "camera_controls", cam_id: camId,
+                controls: FAKE_CONTROLS, controls_available: true, errors: {}
+            }));
+        }
     });
 
     let frame = 0;
@@ -131,8 +179,33 @@ async function connectCamera(port, camId) {
     return {
         ws,
         received,
+        applied,
         stop: () => { running = false; ws.close(); }
     };
+}
+
+/** Minimal JSON request helper for the tests below. */
+function request(port, method, urlPath, body) {
+    return new Promise((resolve, reject) => {
+        const payload = body === undefined ? null : JSON.stringify(body);
+        const req = http.request({
+            host: "127.0.0.1", port, path: urlPath, method,
+            headers: payload
+                ? { "Content-Type": "application/json", "Content-Length": payload.length }
+                : {}
+        }, (res) => {
+            const chunks = [];
+            res.on("data", (c) => chunks.push(c));
+            res.on("end", () => {
+                const text = Buffer.concat(chunks).toString();
+                let json = null;
+                try { json = text ? JSON.parse(text) : null; } catch (_) { /* ignore */ }
+                resolve({ status: res.statusCode, json });
+            });
+        });
+        req.on("error", reject);
+        req.end(payload);
+    });
 }
 
 test("end to end: ingest, buffer, stream, detect, record, serve", async (t) => {
@@ -369,6 +442,125 @@ test("end to end: settings round trip and per-camera overrides", async () => {
         // A hub-wide-only key must be refused on a camera scope.
         const wrongScope = await put("/cam/porch/settings", { "storage.maxTotalGB": 4 });
         assert.equal(wrongScope.status, 400);
+    } finally {
+        await cleanup();
+    }
+});
+
+test("end to end: image controls reach the camera and survive a reconnect", async () => {
+    const { port, cleanup } = await boot();
+    let cam;
+    try {
+        cam = await connectCamera(port, "front");
+        await wait(400);
+
+        // ---- the camera advertises what it supports -------------------
+        const initial = await request(port, "GET", "/cam/front/controls");
+        assert.equal(initial.status, 200);
+        assert.equal(initial.json.connected, true);
+        assert.equal(initial.json.controls_available, true);
+        assert.deepEqual(
+            initial.json.controls.map((c) => c.id),
+            ["brightness", "contrast", "auto_exposure"],
+            "the UI should render exactly what the camera reported"
+        );
+        assert.equal(initial.json.image.rotation, 0, "geometry defaults to unrotated");
+        assert.equal(initial.json.image.zoom, 1);
+
+        // ---- geometry -------------------------------------------------
+        const geometry = await request(port, "PUT", "/cam/front/controls", {
+            image: { rotation: 90, zoom: 2, panX: -0.5, flipHorizontal: true }
+        });
+        assert.equal(geometry.status, 200);
+        assert.equal(geometry.json.image.rotation, 90);
+        assert.equal(geometry.json.image.zoom, 2);
+
+        await wait(250);
+        assert.equal(cam.applied.image.rotation, 90, "the camera received the rotation");
+        assert.equal(cam.applied.image.zoom, 2);
+        assert.equal(cam.applied.image.flipHorizontal, true);
+
+        // The effective resolution must flip immediately, not after a round
+        // trip — the panel shows it right beside the rotation control.
+        assert.equal(geometry.json.resolution, "480x640",
+            "rotating should swap the reported dimensions in the same response");
+
+        const afterRotate = await request(port, "GET", "/cam/front/controls");
+        assert.equal(afterRotate.json.resolution, "480x640");
+
+        // ---- hardware controls ---------------------------------------
+        const hardware = await request(port, "PUT", "/cam/front/controls", {
+            values: { brightness: 20, contrast: 48 }
+        });
+        assert.equal(hardware.status, 200);
+        assert.equal(hardware.json.stored_values.brightness, 20);
+
+        await wait(250);
+        assert.equal(cam.applied.values.brightness, 20, "the camera received brightness");
+        assert.equal(cam.applied.values.contrast, 48);
+
+        // ---- validation ----------------------------------------------
+        const badGeometry = await request(port, "PUT", "/cam/front/controls", {
+            image: { zoom: 99 }
+        });
+        assert.equal(badGeometry.status, 400);
+        assert.match(badGeometry.json.details[0], /must be <= 4/);
+
+        const badValue = await request(port, "PUT", "/cam/front/controls", {
+            values: { brightness: "very" }
+        });
+        assert.equal(badValue.status, 400);
+
+        // ---- the reconnect case, which is the point of persisting -----
+        // V4L2 values live in the camera's driver and are lost on reboot, so
+        // the hub must re-apply them or a power cut silently undoes the tuning.
+        cam.stop();
+        await wait(300);
+        cam = await connectCamera(port, "front");
+        await wait(500);
+
+        assert.equal(cam.applied.values.brightness, 20,
+            "brightness must be re-applied after the camera reconnects");
+        assert.equal(cam.applied.values.contrast, 48);
+        assert.equal(cam.applied.image.rotation, 90,
+            "geometry must be re-applied after the camera reconnects");
+
+        // ---- reset ----------------------------------------------------
+        const reset = await request(port, "POST", "/cam/front/controls/reset", {});
+        assert.equal(reset.status, 200);
+        assert.equal(reset.json.image.rotation, 0, "geometry returns to default");
+        assert.equal(reset.json.image.zoom, 1);
+        assert.deepEqual(reset.json.stored_values, {}, "stored V4L2 values are cleared");
+
+        await wait(250);
+        assert.equal(cam.applied.image.rotation, 0, "the camera was told to un-rotate");
+    } finally {
+        if (cam) cam.stop();
+        await cleanup();
+    }
+});
+
+test("end to end: image settings are kept for a camera that is offline", async () => {
+    const { port, cleanup } = await boot();
+    try {
+        // Adjusting a camera that happens to be unplugged should still save —
+        // being told "camera offline, nothing happened" while the setting is
+        // silently discarded would be the worst outcome.
+        const saved = await request(port, "PUT", "/cam/porch/controls", {
+            image: { rotation: 180 },
+            values: { brightness: 33 }
+        });
+        assert.equal(saved.status, 200);
+        assert.equal(saved.json.connected, false);
+        assert.equal(saved.json.image.rotation, 180);
+        assert.equal(saved.json.stored_values.brightness, 33);
+
+        // ...and be applied the moment it turns up.
+        const cam = await connectCamera(port, "porch");
+        await wait(500);
+        assert.equal(cam.applied.image.rotation, 180);
+        assert.equal(cam.applied.values.brightness, 33);
+        cam.stop();
     } finally {
         await cleanup();
     }

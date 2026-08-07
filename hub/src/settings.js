@@ -32,6 +32,7 @@
  */
 
 const GROUPS = {
+    image: "Image",
     recording: "Recording",
     storage: "Storage",
     detection: "Detection",
@@ -58,6 +59,48 @@ const GROUPS = {
 
 /** @type {Record<string, SettingDef>} */
 const SCHEMA = {
+    // ---- Image geometry -----------------------------------------------
+    //
+    // Applied on the camera before the JPEG encode, so the live feed, the
+    // recordings, and the detector all see the same corrected image. Doing it
+    // in the browser with CSS would fix only what you're looking at and leave
+    // the detector staring at a sideways person.
+    "image.rotation": {
+        group: "image", type: "enum", values: ["0", "90", "180", "270"], default: "0",
+        scope: "camera",
+        label: "Rotation",
+        help: "Rotate clockwise. Use this when the camera is mounted sideways or " +
+              "upside down. 90 and 270 swap the width and height, so any zones " +
+              "you have already drawn will need redrawing."
+    },
+    "image.flipHorizontal": {
+        group: "image", type: "boolean", default: false, scope: "camera",
+        label: "Mirror horizontally",
+        help: "Flips left and right."
+    },
+    "image.flipVertical": {
+        group: "image", type: "boolean", default: false, scope: "camera",
+        label: "Mirror vertically",
+        help: "Flips top and bottom."
+    },
+    "image.zoom": {
+        group: "image", type: "float", default: 1, min: 1, max: 4, scope: "camera",
+        label: "Digital zoom", unit: "x",
+        help: "Crops in and scales back up. There is no extra detail to recover, " +
+              "but it fills the frame with the part you care about — and the " +
+              "detector sees a larger person too."
+    },
+    "image.panX": {
+        group: "image", type: "float", default: 0, min: -1, max: 1, scope: "camera",
+        label: "Pan horizontally",
+        help: "Which part of the frame to zoom into. No effect at 1x zoom."
+    },
+    "image.panY": {
+        group: "image", type: "float", default: 0, min: -1, max: 1, scope: "camera",
+        label: "Pan vertically",
+        help: "No effect at 1x zoom."
+    },
+
     // ---- Recording ----------------------------------------------------
     "recording.enabled": {
         group: "recording", type: "boolean", default: true, scope: "both",

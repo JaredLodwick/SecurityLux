@@ -175,6 +175,10 @@ for the events dashboard. Config search order:
 | `POST` | `/cam/<id>/restart`       | Restart the camera's publisher service (~2 s). |
 | `POST` | `/cam/<id>/reboot`        | Reboot the camera Pi (~40 s; needs the installer's sudoers rule). |
 | `POST` | `/cam/<id>/led/test`      | Body `{"stage": 0-4}` — fire a door-light pattern to check wiring. |
+| `GET`  | `/cam/<id>/controls`      | Everything the image panel renders from: current framing, the V4L2 controls this camera reports supporting (with real ranges), stored values, and the effective output resolution. |
+| `PUT`  | `/cam/<id>/controls`      | Body `{ image?: {rotation, flipHorizontal, flipVertical, zoom, panX, panY}, values?: {control: number} }`. Framing and hardware controls in one request, since the panel edits both together. |
+| `POST` | `/cam/<id>/controls/reset`| Body `{"scope": "all"\|"image"\|"hardware"}` — back to defaults. |
+| `POST` | `/cam/<id>/controls/refresh`| Ask the camera to re-probe its controls. Use after swapping the webcam. |
 | `GET`/`PUT` | `/cam/<id>/settings` | Per-camera setting overrides. `PUT` a key to `null` to clear it and go back to inheriting. |
 | `GET`/`PUT` | `/cam/<id>/zones`    | Named zones. `PUT` replaces the whole set. |
 
@@ -226,7 +230,13 @@ putting auth + TLS in front of it.
 - `{"type":"set_state","state":"on"|"off"}` and `{"type":"hello_ack","cam_id":"..."}`
 - `{"type":"led_config","enabled":true,"count":8,"maxBrightness":0.4}`
 - `{"type":"led","stage":3,"pattern":"pulse","color":[255,160,40],"brightness":0.34,"periodMs":1100,"ttlMs":8000}`
+- `{"type":"image_config","rotation":90,"flipHorizontal":false,"zoom":2,"panX":-0.4,"panY":0}`
+- `{"type":"camera_controls","values":{"brightness":20}}` / `{"type":"get_camera_controls"}` / `{"type":"reset_camera_controls"}`
 - `{"type":"restart_service"}` / `{"type":"reboot"}`
+
+The camera replies to the image messages with `image_state` (the resolved
+geometry, since values are clamped camera-side) and `camera_controls` (what it
+supports, with the driver's real ranges).
 
 LED commands carry a TTL and are re-sent at half of it while a stage is
 held. The camera fades to idle if it stops hearing from the hub, so a hub
@@ -251,6 +261,47 @@ appears to do nothing, clear the override in the UI to hand control back.
 Every setting is declared once in `src/settings.js` with its type, bounds,
 and help text; validation, the API, and the UI controls are all derived
 from that one declaration.
+
+## Image adjustments
+
+Open a camera and click **Adjust image** for a live preview alongside the
+controls. Two groups:
+
+**Framing** — rotation, mirroring, digital zoom and pan. Applied in software on
+the camera. `is_identity` short-circuits the whole pipeline, so a camera you
+haven't adjusted pays nothing; when active it's a few milliseconds a frame
+against a 66 ms budget at 15 fps.
+
+**Image** — brightness, contrast, saturation, sharpness, gain, exposure, white
+balance, anti-flicker. These are V4L2 controls applied by the camera's own
+driver, so they cost **zero CPU** regardless of how far you push them. Prefer
+them over software equivalents.
+
+The second group is built entirely from what the camera reports. UVC webcams
+vary enormously — one might expose eleven controls and another three — so
+nothing is shown that the camera didn't say it has, with the driver's real
+min/max rather than a guessed range. Controls the driver marks inactive (manual
+exposure while auto-exposure is on) are greyed out rather than offered as
+sliders that silently do nothing.
+
+Everything is applied on the camera *before* the JPEG encode, so the live feed,
+the recordings, and the detector all see the same corrected image. Rotating in
+the browser with CSS would fix only what you're looking at and leave the
+detector staring at a sideways person, which is exactly when you most need
+detection to work.
+
+Two things worth knowing:
+
+- **Rotation invalidates zones.** They're normalized coordinates on the rotated
+  image, so turning the picture moves it underneath them. The UI warns and
+  offers to reopen the zone editor.
+- **Hardware values are stored on the hub and re-applied on every reconnect.**
+  V4L2 values live in the camera's driver and are lost when the Pi reboots —
+  without this, a power cut would silently undo your tuning and leave a dark
+  doorway dark.
+
+Requires `v4l-utils` on the camera Pi (already an apt dependency). Without it,
+framing still works and the panel says why the rest is missing.
 
 ## Storage
 

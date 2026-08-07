@@ -223,6 +223,63 @@ test("Store: settings, zones and profiles round trip", () => {
     }
 });
 
+test("Store: hardware image controls persist per camera", () => {
+    // V4L2 values live in the camera's driver and vanish when the Pi reboots,
+    // so the hub has to hold them or a power cut silently undoes the tuning.
+    const { path: dbPath, dir } = tmpDb();
+    try {
+        const store = new Store({ dbPath, logger: silentLog }).open();
+
+        assert.deepEqual(store.getHardwareControls("front"), {}, "empty by default");
+
+        store.putHardwareControls("front", { brightness: 20, contrast: 48 });
+        assert.deepEqual(store.getHardwareControls("front"), { brightness: 20, contrast: 48 });
+
+        // A partial update must merge, not replace — moving one slider should
+        // not clear every other control.
+        const merged = store.putHardwareControls("front", { brightness: -10 });
+        assert.deepEqual(merged, { brightness: -10, contrast: 48 });
+
+        // Cameras are independent.
+        store.putHardwareControls("porch", { gain: 5 });
+        assert.deepEqual(store.getHardwareControls("porch"), { gain: 5 });
+        assert.deepEqual(store.getHardwareControls("front"), { brightness: -10, contrast: 48 });
+
+        store.clearHardwareControls("front");
+        assert.deepEqual(store.getHardwareControls("front"), {});
+        assert.deepEqual(store.getHardwareControls("porch"), { gain: 5 }, "unaffected");
+
+        store.close();
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});
+
+test("Store: hardware controls survive a reopen and never collide with settings", () => {
+    const { path: dbPath, dir } = tmpDb();
+    try {
+        const first = new Store({ dbPath, logger: silentLog }).open();
+        first.putHardwareControls("front", { brightness: 12 });
+        first.putSetting("front", "image.rotation", "90");
+        first.close();
+
+        const second = new Store({ dbPath, logger: silentLog }).open();
+        assert.deepEqual(second.getHardwareControls("front"), { brightness: 12 });
+
+        // The blob is stored in the settings table but must not surface as a
+        // schema setting, or SettingsService would reject it as unknown.
+        const schemaKeys = second.allSettings().map((s) => s.key);
+        assert.ok(schemaKeys.includes("image.rotation"));
+        assert.ok(
+            schemaKeys.every((k) => !k.startsWith("_") || k === "_hardwareControls"),
+            "reserved keys are prefixed so they cannot collide"
+        );
+        second.close();
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});
+
 test("Store: migrates an existing v1 database in place", () => {
     // An installed hub upgrading must not need its events.db wiped.
     const { path: dbPath, dir } = tmpDb();

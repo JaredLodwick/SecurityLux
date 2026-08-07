@@ -190,8 +190,12 @@
     /**
      * Render a modal. `render(close)` returns the body; resolves with whatever
      * `close(value)` is called with, or null if dismissed.
+     *
+     * @param {object} [opts]
+     * @param {boolean} [opts.wide]  Widen the dialog — for panels that need a
+     *   preview alongside their controls rather than a simple form.
      */
-    function modal(title, render) {
+    function modal(title, render, opts) {
         return new Promise((resolve) => {
             const backdrop = el("div.modal-backdrop");
             const close = (value) => {
@@ -201,7 +205,7 @@
             };
             const onKey = (ev) => { if (ev.key === "Escape") close(null); };
 
-            const box = el("div.modal", [
+            const box = el(opts && opts.wide ? "div.modal.modal-wide" : "div.modal", [
                 el("h3", { text: title }),
                 render(close)
             ]);
