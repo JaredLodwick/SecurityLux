@@ -37,6 +37,7 @@ const { Recognizer } = require("./recognize");
 const { buildLedCommand, refreshIntervalFor, DEFAULT_TTL_MS } = require("./led");
 const { matchRoute } = require("./routes");
 const media = require("./media");
+const imageControls = require("./image-controls");
 const eventLog = require("./event-log");
 const enrollment = require("./enrollment");
 const { sendError } = require("./http-util");
@@ -188,7 +189,7 @@ class HubServer {
             logger: this.log
         });
 
-        this.settings.subscribe((changed) => this._onSettingsChanged(changed));
+        this.settings.subscribe((changed, scope) => this._onSettingsChanged(changed, scope));
     }
 
     async stop () {
@@ -253,6 +254,14 @@ class HubServer {
                 connectedAt: 0,
                 reconnects: 0,
                 offlineSince: 0,
+                // Image adjustment state, as last reported by the camera.
+                controls: [],
+                controlsAvailable: false,
+                controlsAt: 0,
+                controlErrors: null,
+                reportedImage: null,
+                reportedResolution: null,
+                baseResolution: null,     // capture size before rotation
                 frameBuffer: new FrameBuffer({ seconds: preRoll, fps })
             };
             this.cams.set(camId, cam);
@@ -284,6 +293,13 @@ class HubServer {
         const led = this._ledState.get(camId);
         this.sendLedCommand(camId, led ? led.stage : 0, {});
 
+        // Re-apply image adjustments. This is not just a convenience: V4L2
+        // control values live in the camera's driver and are lost when the Pi
+        // reboots, so without this a power cut would silently undo the
+        // brightness you tuned and leave a dark doorway dark.
+        this._sendImageConfig(camId);
+        this._sendHardwareControls(camId);
+
         if (this.detector) this.detector.attachCam(cam);
 
         ws.on("message", (data, isBinary) => {
@@ -306,8 +322,17 @@ class HubServer {
                 this.sendCommand(cam, { type: "hello_ack", cam_id: camId });
                 this.sendCommand(cam, { type: "set_state", state: cam.desiredState });
                 this._sendLedConfig(camId);
+                this._sendImageConfig(camId);
+                this._sendHardwareControls(camId);
                 if (msg.capabilities && msg.capabilities.fps) {
                     cam.frameBuffer.setCapacity({ fps: Number(msg.capabilities.fps) });
+                }
+                // The capture resolution *before* any rotation is applied.
+                // Knowing the base lets the hub compute the effective size
+                // itself, so the UI updates the instant you rotate rather than
+                // waiting a round trip for the camera to report back.
+                if (msg.capabilities && msg.capabilities.resolution) {
+                    cam.baseResolution = String(msg.capabilities.resolution);
                 }
             } else if (msg.type === "status") {
                 cam.status = {
@@ -320,6 +345,10 @@ class HubServer {
                     uptime_s: msg.uptime_s,
                     reported_state: msg.state
                 };
+            } else if (msg.type === "camera_controls") {
+                imageControls.onCameraControlsMessage(this, cam, msg);
+            } else if (msg.type === "image_state") {
+                imageControls.onImageStateMessage(cam, msg);
             }
         });
 
@@ -571,6 +600,20 @@ class HubServer {
         return sent ? { ok: true } : { ok: false, error: "failed to send LED command" };
     }
 
+    // ==================================================================
+    //  Image adjustments — thin delegates over image-controls.js
+    // ==================================================================
+
+    imageConfigFor (camId) { return imageControls.imageConfigFor(this, camId); }
+    controlsFor (camId) { return imageControls.controlsFor(this, camId); }
+    setHardwareControls (camId, values) {
+        return imageControls.setHardwareControls(this, camId, values);
+    }
+    resetHardwareControls (camId) { return imageControls.resetHardwareControls(this, camId); }
+
+    _sendImageConfig (camId) { return imageControls.sendImageConfig(this, camId); }
+    _sendHardwareControls (camId) { return imageControls.sendHardwareControls(this, camId); }
+
     /** Push the camera its LED wiring config so it can init the strip. */
     _sendLedConfig (camId) {
         if (!this.settings) return;
@@ -662,7 +705,7 @@ class HubServer {
     //  Settings reactions
     // ==================================================================
 
-    _onSettingsChanged (changed) {
+    _onSettingsChanged (changed, scope) {
         if (this.storage) this.storage.onSettingsChanged(changed);
 
         // Pre-roll depth and frame rate change the ring buffer's shape, so a
@@ -678,6 +721,14 @@ class HubServer {
 
         if (changed.some((k) => k.startsWith("led."))) {
             for (const camId of this.cams.keys()) this._sendLedConfig(camId);
+        }
+
+        // Geometry changes apply on the camera's very next frame, which is what
+        // makes dragging a zoom slider feel live rather than needing a save.
+        // image.* is camera-scoped, so the scope names exactly one camera.
+        if (changed.some((k) => k.startsWith("image."))) {
+            const targets = (scope && scope !== "global") ? [scope] : [...this.cams.keys()];
+            for (const camId of targets) this._sendImageConfig(camId);
         }
     }
 
@@ -740,7 +791,9 @@ class HubServer {
 /** Routes that can't do anything useful without the database. */
 function needsStore (pathname) {
     return /^\/(events|settings|storage|profiles|recognition)/.test(pathname)
-        || /^\/cam\/[^/]+\/(events|zones|settings)$/.test(pathname);
+        // Image controls read settings and the stored V4L2 values, so they need
+        // the database just as much as the routes above.
+        || /^\/cam\/[^/]+\/(events|zones|settings|controls)(\/|$)/.test(pathname);
 }
 
 module.exports = { HubServer };

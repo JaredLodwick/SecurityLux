@@ -12,6 +12,11 @@ and listens for control messages from the hub:
     ``CameraState`` so ``CameraManager`` opens or releases the device.
   * ``{"type": "led_config", ...}``    → configure the door light strip.
   * ``{"type": "led", ...}``           → play a door-light stage.
+  * ``{"type": "image_config", ...}``  → rotation / flip / zoom, applied to the
+    next captured frame.
+  * ``{"type": "camera_controls", ...}`` → V4L2 hardware controls (brightness,
+    contrast, exposure, …).
+  * ``{"type": "get_camera_controls"}``  → report what this camera supports.
   * ``{"type": "restart_service"}``    → exit cleanly; systemd restarts us.
   * ``{"type": "reboot"}``             → reboot the Pi.
 
@@ -34,6 +39,7 @@ import websockets
 from websockets.exceptions import ConnectionClosed
 
 from .camera import CameraConfig, CameraManager
+from .imaging import ImageSettings
 from .led import LedController
 from .pisugar import PiSugarClient
 from .state import CameraState, StateValue
@@ -148,9 +154,17 @@ class Publisher:
                 "resolution": f"{self.cam_cfg.width}x{self.cam_cfg.height}",
                 "jpeg_quality": int(self.cam_cfg.jpeg_quality),
                 "led": self.led.enabled,
-                "commands": ["set_state", "led", "led_config", "restart_service", "reboot"],
+                "commands": [
+                    "set_state", "led", "led_config", "image_config",
+                    "camera_controls", "get_camera_controls",
+                    "restart_service", "reboot",
+                ],
             },
         }))
+
+        # Tell the hub what this camera can actually be adjusted for, so the UI
+        # only offers controls that exist. UVC webcams vary enormously here.
+        await self._send_camera_controls(ws)
 
         recv_task = asyncio.create_task(self._receive_loop(ws))
         frame_task = asyncio.create_task(self._frame_loop(ws))
@@ -202,6 +216,34 @@ class Publisher:
         elif mtype == "led":
             self.led.submit(msg)
 
+        elif mtype == "image_config":
+            settings = self.camera.apply_image_settings(msg)
+            # Echo the resolved geometry back. Values are clamped on the camera,
+            # so the UI should render what was actually applied rather than what
+            # it asked for.
+            with contextlib.suppress(Exception):
+                await ws.send(json.dumps({
+                    "type": "image_state",
+                    "cam_id": self.cam_id,
+                    "image": settings.to_dict(),
+                    "resolution": self.camera.resolution_str,
+                }))
+
+        elif mtype == "camera_controls":
+            result = await asyncio.to_thread(
+                self.camera.apply_hardware_controls, msg.get("values") or {}
+            )
+            if result.get("errors"):
+                log.warning("Some camera controls were rejected: %s", result["errors"])
+            await self._send_camera_controls(ws, result=result)
+
+        elif mtype == "reset_camera_controls":
+            result = await asyncio.to_thread(self.camera.reset_hardware_controls)
+            await self._send_camera_controls(ws, result=result)
+
+        elif mtype == "get_camera_controls":
+            await self._send_camera_controls(ws)
+
         elif mtype == "restart_service":
             log.info("Hub requested a service restart")
             await self._acknowledge(ws, "restart_service")
@@ -217,6 +259,38 @@ class Publisher:
 
         else:
             log.debug("Ignoring unknown command type: %s", mtype)
+
+    async def _send_camera_controls(
+        self,
+        ws: "websockets.WebSocketClientProtocol",
+        result: Optional[dict[str, Any]] = None,
+    ) -> None:
+        """
+        Report the camera's supported hardware controls and current geometry.
+
+        Probing shells out to v4l2-ctl, so it runs off the event loop — a slow
+        or wedged device must not stall the frame pump.
+        """
+        try:
+            controls = await asyncio.to_thread(self.camera.list_hardware_controls)
+        except Exception:
+            log.exception("Failed to probe camera controls")
+            controls = []
+
+        payload: dict[str, Any] = {
+            "type": "camera_controls",
+            "cam_id": self.cam_id,
+            "controls": controls,
+            "controls_available": self.camera.hardware_controls_available,
+            "image": self.camera.image_settings.to_dict(),
+            "resolution": self.camera.resolution_str,
+        }
+        if result is not None:
+            payload["applied"] = result.get("applied", {})
+            payload["errors"] = result.get("errors", {})
+
+        with contextlib.suppress(Exception):
+            await ws.send(json.dumps(payload))
 
     async def _acknowledge(
         self, ws: "websockets.WebSocketClientProtocol", action: str
@@ -323,7 +397,12 @@ def run_from_env() -> None:
     )
     cam_id = str(config["camera"]["id"])
     state = CameraState(initial="off")
-    camera = CameraManager(cam_cfg, state)
+    # Bootstrap geometry from the local config; the hub pushes the
+    # authoritative values on connect, so this only matters for the seconds
+    # before that (and for a camera running with no hub reachable).
+    camera = CameraManager(
+        cam_cfg, state, ImageSettings.from_message(config.get("image") or {})
+    )
     pisugar = PiSugarClient(
         host=str(config["pisugar"]["host"]),
         port=int(config["pisugar"]["port"]),

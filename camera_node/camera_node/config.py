@@ -48,6 +48,22 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "count": 8,
         "max_brightness": 0.4,
     },
+    # Image geometry. Also bootstrap-only — the hub pushes the authoritative
+    # values in an `image_config` message on connect. Setting these here only
+    # matters for the seconds before the hub connects, and for a camera running
+    # with no hub reachable at all.
+    #
+    # Hardware controls (brightness, contrast, exposure) are deliberately not
+    # here: which ones exist depends on the webcam, so they're discovered at
+    # runtime and stored on the hub.
+    "image": {
+        "rotation": 0,
+        "flipHorizontal": False,
+        "flipVertical": False,
+        "zoom": 1.0,
+        "panX": 0.0,
+        "panY": 0.0,
+    },
     "logging": {
         "level": "INFO",
     },
