@@ -436,6 +436,66 @@ table.breakdown td.num { text-align: right; font-variant-numeric: tabular-nums; 
 }
 .zone-item-row { display: flex; gap: 6px; align-items: center; margin-top: 6px; }
 
+/* ============================ Camera controls ============================ */
+
+.controls-panel { display: flex; flex-direction: column; gap: 14px; }
+
+.controls-layout { display: flex; gap: 18px; align-items: flex-start; }
+.controls-preview-column { flex: 0 0 340px; position: sticky; top: 0; }
+.controls-settings-column {
+  flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 14px;
+}
+
+.controls-preview {
+  border: 1px solid var(--border); border-radius: var(--radius);
+  overflow: hidden; background: #0a0a0b;
+  display: flex; align-items: center; justify-content: center;
+  min-height: 190px;
+}
+/* contain, not cover: a rotated camera becomes portrait, and cropping the
+   preview would hide exactly the framing change being made. */
+.controls-preview .sl-stream { width: 100%; display: block; }
+.controls-preview img { width: 100%; max-height: 46vh; object-fit: contain; display: block; }
+.controls-preview .placeholder {
+  padding: 22px 16px; text-align: center; color: var(--text-muted); font-size: 0.84rem;
+}
+
+.controls-panel .setting-row { grid-template-columns: 1fr 210px; }
+.controls-panel .setting-row[data-inactive="true"] { opacity: 0.55; }
+.controls-panel .setting-row[data-inactive="true"] .slider { pointer-events: none; }
+
+.slider-wrap { display: flex; align-items: center; gap: 10px; width: 100%; }
+
+input.slider {
+  -webkit-appearance: none; appearance: none;
+  flex: 1; min-width: 0; height: 4px; border-radius: 999px;
+  background: var(--border); outline: none; padding: 0; margin: 0;
+}
+input.slider::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 15px; height: 15px; border-radius: 50%;
+  background: var(--accent); cursor: pointer; border: none;
+}
+input.slider::-moz-range-thumb {
+  width: 15px; height: 15px; border-radius: 50%;
+  background: var(--accent); cursor: pointer; border: none;
+}
+input.slider:focus-visible { box-shadow: 0 0 0 2px var(--accent-dim); }
+
+.slider-value {
+  flex: 0 0 46px; text-align: right;
+  font-variant-numeric: tabular-nums; font-size: 0.8rem; color: var(--text-muted);
+}
+
+/* The control panel needs more room than a standard dialog. */
+.modal.modal-wide { max-width: 900px; }
+
+@media (max-width: 820px) {
+  .controls-layout { flex-direction: column; }
+  .controls-preview-column { flex: 1 1 auto; width: 100%; position: static; }
+  .controls-panel .setting-row { grid-template-columns: 1fr; }
+}
+
 /* ============================ Modal ============================ */
 
 .modal-backdrop {

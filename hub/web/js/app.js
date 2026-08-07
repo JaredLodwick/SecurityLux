@@ -268,6 +268,13 @@
         const actions = el("div.page-header-actions");
         if (cam) {
             actions.appendChild(el("button.btn", {
+                text: "Adjust image",
+                title: "Rotation, zoom, brightness, contrast, exposure…",
+                onclick: async () => {
+                    if (await SL.controls.open(cam.cam_id)) refresh();
+                }
+            }));
+            actions.appendChild(el("button.btn", {
                 text: "Zones",
                 title: "Draw and name the regions this camera can see",
                 onclick: async () => {

@@ -31,6 +31,12 @@ const QUERY_LIMIT_DEFAULT = 50;
 const QUERY_LIMIT_MAX = 500;
 
 /**
+ * Settings key holding a camera's V4L2 control values as one JSON blob.
+ * Prefixed with `_` so it can never collide with a schema-declared key.
+ */
+const HARDWARE_CONTROLS_KEY = "_hardwareControls";
+
+/**
  * Ordered schema steps. Index + 1 is the resulting `user_version`, so appending
  * a new function is all that's needed to ship a migration. Never edit or
  * reorder an existing entry — someone's DB is already at that version.
@@ -489,6 +495,41 @@ class Store {
 
     deleteSetting(scope, key) {
         this.db.prepare("DELETE FROM settings WHERE scope = ? AND key = ?").run(scope, key);
+    }
+
+    // ---- Hardware image controls -------------------------------------
+    //
+    // Kept outside the settings schema on purpose: which controls exist depends
+    // entirely on the webcam, so there is no fixed key list to declare. Stored
+    // as one JSON blob per camera in the same table.
+    //
+    // Persisting these matters more than it looks. V4L2 control values live in
+    // the driver and are lost when the camera Pi reboots — so without this, a
+    // power cut would silently reset the brightness you carefully tuned, and a
+    // dark doorway would stay dark until someone noticed.
+
+    getHardwareControls(camId) {
+        const row = this.db.prepare(
+            "SELECT value_json FROM settings WHERE scope = ? AND key = ?"
+        ).get(camId, HARDWARE_CONTROLS_KEY);
+        if (!row) return {};
+        try {
+            const parsed = JSON.parse(row.value_json);
+            return (parsed && typeof parsed === "object") ? parsed : {};
+        } catch (_) {
+            return {};
+        }
+    }
+
+    /** Merge new values over the stored ones and return the result. */
+    putHardwareControls(camId, values) {
+        const merged = { ...this.getHardwareControls(camId), ...(values || {}) };
+        this.putSetting(camId, HARDWARE_CONTROLS_KEY, merged);
+        return merged;
+    }
+
+    clearHardwareControls(camId) {
+        this.deleteSetting(camId, HARDWARE_CONTROLS_KEY);
     }
 
     // ==================================================================
