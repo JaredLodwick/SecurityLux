@@ -168,6 +168,38 @@ a plain-English description, and an inline playable clip.
 
 ---
 
+## Making the picture look right
+
+Open a camera in the dashboard and click **Adjust image**. You get a live
+preview next to the controls, so you can see what you're changing.
+
+**Framing** — rotation (for a camera mounted sideways or upside down),
+horizontal/vertical mirroring, and digital zoom with pan to fill the frame with
+the bit you care about.
+
+**Image** — brightness, contrast, saturation, sharpness, gain, exposure, white
+balance and anti-flicker, depending on what your webcam supports. Only the
+controls your camera actually has are shown, with its real ranges — no sliders
+that silently do nothing.
+
+Everything is applied on the camera before the video is encoded, so the live
+feed, the recordings, and the person detector all see the same corrected image.
+That last part matters: rotating the picture only in your browser would leave
+the detector looking at a sideways person, and it's much worse at recognising
+those.
+
+Two things to know:
+
+- **Rotating invalidates any zones you've drawn** — they're positions on the
+  picture, and rotating moves the picture underneath them. The UI warns you and
+  offers to reopen the zone editor.
+- **Your settings survive a camera reboot.** Brightness and friends live in the
+  camera's driver and reset when it loses power, so the hub stores them and
+  re-applies them whenever the camera reconnects.
+
+Brightness/contrast/exposure need `v4l-utils` on the camera Pi (the installer
+puts it there). Framing works regardless.
+
 ## Getting good descriptions
 
 Out of the box an event reads *"Someone was at the front door camera for
@@ -356,6 +388,19 @@ brings it back in about two seconds, which fixes nearly every camera
 problem. **Reboot** restarts the whole Pi and takes about a minute; it
 needs the scoped sudoers rule that `camera_node/install.sh` installs, so
 re-run that installer on the camera if reboot reports a failure.
+
+### My camera is mounted sideways / the picture is too dark
+
+Camera → **Adjust image**. Rotation fixes the mounting; brightness, contrast,
+gain and exposure fix the exposure. See "Making the picture look right" above.
+
+If the only thing you see is the framing controls, the camera Pi is missing
+`v4l2-ctl` — `sudo apt install v4l-utils` on that Pi and hit **Re-detect**.
+
+A dark doorway is usually better fixed with **backlight compensation** (if your
+webcam has it) or by turning **auto exposure** off and raising the exposure time
+manually, rather than by winding brightness up — brightness lifts the whole
+image including the noise, whereas exposure actually collects more light.
 
 ### What's the LED strip for?
 

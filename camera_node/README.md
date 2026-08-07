@@ -31,6 +31,8 @@ camera_node/
     config.py          # YAML config loader
     pisugar.py         # TCP client for the PiSugar daemon
     led.py             # optional NeoPixel door light (SPI)
+    imaging.py         # rotation / flip / zoom, applied before JPEG encode
+    controls.py        # V4L2 hardware controls via v4l2-ctl
   tests/               # pytest suite (no hardware required)
   deploy/camera-node.service
   config.example.yml
@@ -55,6 +57,41 @@ WebSocket `wss?://<hub>/cam/<cam_id>`.
   - `{"type":"hello_ack","cam_id":"front"}` — informational.
 
 Reconnects use exponential backoff (1s → 30s).
+
+## Image adjustments
+
+Framing (rotation, mirroring, digital zoom, pan) and hardware controls
+(brightness, contrast, exposure, white balance…) are both driven from the hub's
+web UI — camera → **Adjust image** — with a live preview.
+
+Everything is applied **here on the camera, before the JPEG encode**, so the
+live feed, the hub's recordings, and the person detector all see the same
+corrected picture. Doing it in the browser would fix only what you're looking
+at and leave the detector staring at a sideways person.
+
+`imaging.py` handles framing. It short-circuits entirely when nothing is set,
+so an unadjusted camera pays no cost at all — not even a copy. With adjustments
+active, 180° and flips are cheap array operations, 90/270 is a transpose plus a
+flip, and zoom is a slice plus one resize: low single-digit milliseconds at
+640×480, against a 66 ms budget at 15 fps.
+
+`controls.py` handles the hardware side via `v4l2-ctl`, not OpenCV. OpenCV's
+`CAP_PROP_BRIGHTNESS` and friends behave inconsistently across backends — some
+normalise to 0-1, some pass raw driver units, and none report a control's
+actual range or whether the camera has it. `v4l2-ctl --list-ctrls` gives all of
+that, which is what makes it possible to show only the controls a given webcam
+genuinely supports with sliders that span its real range.
+
+Those are *hardware* controls: the sensor or driver applies them, so unlike the
+geometry transforms they cost zero CPU per frame. Prefer them wherever both
+exist.
+
+`v4l-utils` is already in `apt-requirements.txt`. Without it, framing still
+works and the panel explains why the rest is unavailable.
+
+Note that 90° and 270° rotation swap width and height, so the camera's
+effective resolution changes — and any zones drawn on the old orientation will
+need redrawing.
 
 ## Remote restart and reboot
 
@@ -216,8 +253,11 @@ pip install -r requirements.txt
 pytest
 ```
 
-61 tests exercising the config loader, the state machine, the PiSugar
-parsers/client, and the door light's animation maths and TTL expiry — no
-hardware, no SPI bus, and no hub required. The LED tests deliberately run
-without any Adafruit libraries installed, which is also the check that a
-camera with no strip degrades cleanly.
+119 tests exercising the config loader, the state machine, the PiSugar
+parsers/client, the door light's animation maths and TTL expiry, the image
+transforms, and the V4L2 control parser — no hardware, no SPI bus, no webcam
+and no hub required.
+
+The LED tests deliberately run with no Adafruit libraries installed and the
+control tests with no `v4l2-ctl` present, which is also how we check that a
+camera missing either degrades cleanly rather than failing to stream.
