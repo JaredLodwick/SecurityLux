@@ -217,7 +217,7 @@
             dom.view.append(dom.liveHeader, dom.liveCameras, dom.liveEvents);
         }
 
-        const selected = camId && state.cams.some((c) => c.cam_id === camId) ? camId : null;
+        const selected = SL.resolveSelectedCam(camId, state.cams);
         renderLiveHeader(selected);
         SL.cameras.render(dom.liveCameras, state.cams, selected, (id) => navigate(`live/${encodeURIComponent(id)}`));
 
@@ -245,10 +245,14 @@
         const left = el("div.page-header-left");
 
         if (cam) {
-            left.appendChild(el("button.btn.btn-icon", {
-                title: "Back to all cameras", text: "←",
-                onclick: () => navigate("live")
-            }));
+            // No back arrow with a single camera — there is no grid behind it,
+            // so the button would lead straight back to the same screen.
+            if (state.cams.length > 1) {
+                left.appendChild(el("button.btn.btn-icon", {
+                    title: "Back to all cameras", text: "←",
+                    onclick: () => navigate("live")
+                }));
+            }
             left.appendChild(el("h2", [
                 el("span.state-dot", {
                     dataset: { state: !cam.connected ? "offline" : (cam.state === "on" ? "on" : "off") }
@@ -267,13 +271,9 @@
 
         const actions = el("div.page-header-actions");
         if (cam) {
-            actions.appendChild(el("button.btn", {
-                text: "Adjust image",
-                title: "Rotation, zoom, brightness, contrast, exposure…",
-                onclick: async () => {
-                    if (await SL.controls.open(cam.cam_id)) refresh();
-                }
-            }));
+            // No "Adjust image" button here — those controls live on the feed
+            // itself, behind the gear in its corner, so the picture stays
+            // visible while you tune it.
             actions.appendChild(el("button.btn", {
                 text: "Zones",
                 title: "Draw and name the regions this camera can see",
@@ -393,6 +393,9 @@
         dom.systemStatus = document.getElementById("system-status");
 
         global.addEventListener("hashchange", () => {
+            // A card is re-parented on navigation; an open panel would ride
+            // along into the side rail where it doesn't fit.
+            if (SL.controls) SL.controls.closeAll();
             mountedSection = null;     // force a rebuild when the section changes
             renderCurrentView();
             fetchEvents(true).then(renderCurrentView).catch(() => { /* surfaced by the poll */ });

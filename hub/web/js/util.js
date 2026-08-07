@@ -67,6 +67,33 @@
     }
 
     // ---------------------------------------------------------------
+    //  Selection
+    // ---------------------------------------------------------------
+
+    /**
+     * Which camera the Live view is focused on.
+     *
+     * A single camera is always the selected one. It has no grid to drill into
+     * — `renderSingle` deliberately gives its card no click handler — so
+     * without this it could never become "selected", and every per-camera
+     * control (adjust image, zones, restart, reboot) would be unreachable
+     * unless you typed the URL by hand. That is exactly the bug this function
+     * exists to prevent recurring.
+     *
+     * @param {string|null} hashCamId  Camera id from the URL hash, if any.
+     * @param {Array<{cam_id: string}>} cams
+     * @returns {string|null}
+     */
+    function resolveSelectedCam(hashCamId, cams) {
+        const list = Array.isArray(cams) ? cams : [];
+        // A stale hash (camera renamed or removed) falls through rather than
+        // leaving the view pointed at something that no longer exists.
+        if (hashCamId && list.some((c) => c.cam_id === hashCamId)) return hashCamId;
+        if (list.length === 1) return list[0].cam_id;
+        return null;
+    }
+
+    // ---------------------------------------------------------------
     //  Formatting
     // ---------------------------------------------------------------
 
@@ -236,8 +263,17 @@
     }
 
     Object.assign(SL, {
-        el, clear, appendChildren,
+        el, clear, appendChildren, resolveSelectedCam,
         formatBytes, formatDuration, formatTime, formatRelative, capitalize,
         api, toast, modal, confirmAction
     });
-})(window);
+
+    // Export the pure helpers for tests. The DOM-touching ones are left alone;
+    // they need a browser and are exercised by hand.
+    if (typeof module !== "undefined" && module.exports) {
+        module.exports = {
+            resolveSelectedCam,
+            formatBytes, formatDuration, formatRelative, capitalize
+        };
+    }
+})(typeof window !== "undefined" ? window : globalThis);

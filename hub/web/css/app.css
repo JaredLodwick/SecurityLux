@@ -436,33 +436,114 @@ table.breakdown td.num { text-align: right; font-variant-numeric: tabular-nums; 
 }
 .zone-item-row { display: flex; gap: 6px; align-items: center; margin-top: 6px; }
 
-/* ============================ Camera controls ============================ */
+/* ============================ Camera controls ============================
+   A gear on the feed, and a panel that slides in over one edge of it.
 
-.controls-panel { display: flex; flex-direction: column; gap: 14px; }
+   Not a modal, on purpose: you are adjusting a picture, so you have to be able
+   to watch the picture change. The panel covers roughly a third of the frame
+   and the rest keeps streaming live underneath. */
 
-.controls-layout { display: flex; gap: 18px; align-items: flex-start; }
-.controls-preview-column { flex: 0 0 340px; position: sticky; top: 0; }
-.controls-settings-column {
-  flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 14px;
-}
-
-.controls-preview {
-  border: 1px solid var(--border); border-radius: var(--radius);
-  overflow: hidden; background: #0a0a0b;
+.cam-settings-btn {
+  position: absolute; top: 8px; right: 8px; z-index: 3;
+  width: 30px; height: 30px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
-  min-height: 190px;
+  padding: 0; cursor: pointer;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  backdrop-filter: blur(4px);
+  /* Always visible rather than hover-only: hover doesn't exist on a phone,
+     and this is the only way into the controls. */
+  opacity: 0.7;
+  transition: opacity 0.15s, background 0.15s, transform 0.15s;
 }
-/* contain, not cover: a rotated camera becomes portrait, and cropping the
-   preview would hide exactly the framing change being made. */
-.controls-preview .sl-stream { width: 100%; display: block; }
-.controls-preview img { width: 100%; max-height: 46vh; object-fit: contain; display: block; }
-.controls-preview .placeholder {
-  padding: 22px 16px; text-align: center; color: var(--text-muted); font-size: 0.84rem;
+.cam-settings-btn:hover { opacity: 1; background: rgba(0, 0, 0, 0.72); }
+.cam-settings-btn:active { transform: scale(0.93); }
+.cam-settings-btn:focus-visible { opacity: 1; outline: 2px solid var(--accent); }
+
+.cam-controls-panel {
+  position: absolute; top: 0; right: 0; bottom: 0; z-index: 4;
+  width: min(320px, 82%);
+  display: flex; flex-direction: column;
+  background: rgba(11, 11, 13, 0.9);
+  backdrop-filter: blur(12px);
+  border-left: 1px solid var(--border);
+  transform: translateX(100%);
+  transition: transform 0.18s ease-out;
+  text-align: left;
+  cursor: default;
+}
+.cam-controls-panel[data-open="true"] { transform: translateX(0); }
+
+.cam-controls-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 12px; flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.82rem; font-weight: 600;
+}
+.cam-controls-close {
+  background: transparent; border: none; color: var(--text-muted);
+  cursor: pointer; font-size: 0.9rem; line-height: 1; padding: 2px 4px;
+}
+.cam-controls-close:hover { color: #fff; }
+
+.cam-controls-body { overflow-y: auto; flex: 1; padding: 4px 0 0; }
+.cam-controls-loading, .cam-controls-error {
+  padding: 18px 12px; font-size: 0.8rem; color: var(--text-muted); text-align: center;
+}
+.cam-controls-error { color: var(--error); }
+
+.cam-controls-section { padding: 6px 12px 10px; }
+.cam-controls-section h4 {
+  margin: 6px 0 4px; font-size: 0.7rem; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted);
+  display: flex; align-items: baseline; gap: 6px;
+}
+.cam-controls-note {
+  font-weight: 400; text-transform: none; letter-spacing: 0;
+  font-size: 0.68rem; color: var(--text-dim);
+}
+.cam-controls-note-block {
+  margin: 4px 12px 8px; padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.04); border-radius: 5px;
+  font-size: 0.74rem; color: var(--text-muted); line-height: 1.4;
+}
+.cam-controls-note-block[data-kind="warn"] { color: var(--warn); }
+
+.cam-control-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 5px 0; min-height: 30px;
+}
+.cam-control-row[data-inactive="true"] { opacity: 0.45; }
+.cam-control-row[data-inactive="true"] .slider,
+.cam-control-row[data-inactive="true"] select { pointer-events: none; }
+
+.cam-control-label {
+  flex: 0 0 84px; min-width: 0;
+  font-size: 0.76rem; display: flex; flex-direction: column;
+}
+.cam-control-help { font-size: 0.66rem; color: var(--text-dim); line-height: 1.25; }
+.cam-control-input { flex: 1; min-width: 0; display: flex; justify-content: flex-end; }
+.cam-control-input select {
+  width: 100%; background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--border); border-radius: 5px;
+  padding: 4px 7px; font-size: 0.76rem;
 }
 
-.controls-panel .setting-row { grid-template-columns: 1fr 210px; }
-.controls-panel .setting-row[data-inactive="true"] { opacity: 0.55; }
-.controls-panel .setting-row[data-inactive="true"] .slider { pointer-events: none; }
+.cam-controls-footer {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  padding: 9px 12px; flex-shrink: 0;
+  border-top: 1px solid var(--border);
+  font-size: 0.72rem;
+}
+.cam-controls-footer .btn { font-size: 0.72rem; padding: 4px 8px; }
+.cam-controls-res { color: var(--text-dim); font-variant-numeric: tabular-nums; }
+
+/* On a narrow phone the panel takes the whole frame — a third of a 340px-wide
+   feed would be unusable, and you can close it to check the result. */
+@media (max-width: 560px) {
+  .cam-controls-panel { width: 100%; border-left: none; }
+}
 
 .slider-wrap { display: flex; align-items: center; gap: 10px; width: 100%; }
 
@@ -487,14 +568,8 @@ input.slider:focus-visible { box-shadow: 0 0 0 2px var(--accent-dim); }
   font-variant-numeric: tabular-nums; font-size: 0.8rem; color: var(--text-muted);
 }
 
-/* The control panel needs more room than a standard dialog. */
+/* Used by the zone editor, which genuinely needs a dialog. */
 .modal.modal-wide { max-width: 900px; }
-
-@media (max-width: 820px) {
-  .controls-layout { flex-direction: column; }
-  .controls-preview-column { flex: 1 1 auto; width: 100%; position: static; }
-  .controls-panel .setting-row { grid-template-columns: 1fr; }
-}
 
 /* ============================ Modal ============================ */
 

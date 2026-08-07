@@ -170,8 +170,10 @@ a plain-English description, and an inline playable clip.
 
 ## Making the picture look right
 
-Open a camera in the dashboard and click **Adjust image**. You get a live
-preview next to the controls, so you can see what you're changing.
+Open a camera in the dashboard and click the **gear in the corner of the
+feed**. The controls slide in over one edge of the picture, and the rest of
+the feed keeps streaming live underneath — so you watch the actual image
+change as you drag a slider, rather than squinting at a thumbnail in a dialog.
 
 **Framing** — rotation (for a camera mounted sideways or upside down),
 horizontal/vertical mirroring, and digital zoom with pan to fill the frame with
@@ -391,8 +393,9 @@ re-run that installer on the camera if reboot reports a failure.
 
 ### My camera is mounted sideways / the picture is too dark
 
-Camera → **Adjust image**. Rotation fixes the mounting; brightness, contrast,
-gain and exposure fix the exposure. See "Making the picture look right" above.
+Click the **gear in the corner of the feed**. Rotation fixes the mounting;
+brightness, contrast, gain and exposure fix the picture. See "Making the
+picture look right" above.
 
 If the only thing you see is the framing controls, the camera Pi is missing
 `v4l2-ctl` — `sudo apt install v4l-utils` on that Pi and hit **Re-detect**.

@@ -54,6 +54,11 @@
 
         refs.frame = el("div.cam-frame", [keeper.element, refs.badges, refs.bboxLayer]);
 
+        // Gear in the corner of the feed. Lives on the frame rather than in a
+        // page header so the controls open *over the live picture* — you have
+        // to be able to watch what you're adjusting.
+        if (SL.controls) SL.controls.attachButton(refs.frame, cam.cam_id);
+
         refs.dot = el("span.state-dot");
         refs.nameText = el("span", { text: cam.name || cam.cam_id });
         refs.detectionToggle = buildDetectionToggle(cam);
@@ -205,6 +210,7 @@
         // they'd keep holding a connection slot invisibly.
         for (const [camId, entry] of cards) {
             if (!statusByCam.has(camId)) {
+                if (SL.controls) SL.controls.close(camId);
                 entry.keeper.destroy();
                 cards.delete(camId);
             }
@@ -318,6 +324,7 @@
     }
 
     function destroyAll() {
+        if (SL.controls) SL.controls.closeAll();
         for (const entry of cards.values()) entry.keeper.destroy();
         cards.clear();
     }
