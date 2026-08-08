@@ -550,7 +550,7 @@ Kept out of `requirements.txt` on purpose: `adafruit-blinka` binds to Raspberry 
 | **M15 — Door light** | done | SPI-driven NeoPixel on the camera Pi with five escalating patterns, TTL-based fail-dark, software brightness cap, and a wiring-test button. Degrades to a no-op with no hardware. |
 | **M16 — Remote camera control** | done | Restart and reboot from the UI, scoped sudoers rule, uptime + reconnect count surfaced per camera. |
 | **M17 — Browser-editable settings** | done | Schema-driven settings with per-camera overrides; API and UI generated from one declaration. |
-| **M18 — Image adjustments** | done | Framing (rotation/mirror/zoom/pan) in software on the camera, plus per-camera V4L2 hardware controls discovered at runtime. Live-preview control panel in the dashboard. Applied upstream of the encode so the feed, the clips, and the detector agree; hardware values persisted on the hub and re-applied on reconnect. |
+| **M18 — Image adjustments** | done | Framing (rotation/mirror/zoom/pan) in software on the camera, plus per-camera V4L2 hardware controls discovered at runtime. Control panel opens over the live feed from a gear on the frame, so the picture stays visible while adjusting. Applied upstream of the encode so the feed, the clips, and the detector agree; hardware values persisted on the hub and re-applied on reconnect. |
 
 ## 14. Risks & open questions
 

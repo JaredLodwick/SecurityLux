@@ -264,8 +264,9 @@ from that one declaration.
 
 ## Image adjustments
 
-Open a camera and click **Adjust image** for a live preview alongside the
-controls. Two groups:
+Click the **gear in the corner of any camera feed**. The panel slides in over
+one edge of the frame and the rest of the picture keeps streaming underneath, so
+you can see what each control does as you change it. Two groups:
 
 **Framing** — rotation, mirroring, digital zoom and pan. Applied in software on
 the camera. `is_identity` short-circuits the whole pipeline, so a camera you

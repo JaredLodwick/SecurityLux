@@ -62,7 +62,8 @@ Reconnects use exponential backoff (1s → 30s).
 
 Framing (rotation, mirroring, digital zoom, pan) and hardware controls
 (brightness, contrast, exposure, white balance…) are both driven from the hub's
-web UI — camera → **Adjust image** — with a live preview.
+web UI — the gear in the corner of the camera feed, which opens a panel over
+the live picture.
 
 Everything is applied **here on the camera, before the JPEG encode**, so the
 live feed, the hub's recordings, and the person detector all see the same
