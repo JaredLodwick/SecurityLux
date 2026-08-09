@@ -41,7 +41,7 @@ let sharp;
 
 const INPUT_W = 320;
 const INPUT_H = 320;
-const NUM_CANDIDATES = 8400;       // YOLOv8 at 320x320
+const NUM_CANDIDATES = 2100;       // YOLOv8 at 320x320: (40^2 + 20^2 + 10^2) grid cells
 const PERSON_CLASS_INDEX = 0;
 const MAX_DETECTIONS = 8;
 const NMS_IOU_THRESHOLD = 0.45;

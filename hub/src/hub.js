@@ -46,7 +46,7 @@ const DEFAULT_CONFIG = {
         enabled: false,
         classes: ["person"],
         modelUrl: "https://github.com/JaredLodwick/SecurityLux/releases/download/models-v1/yolov8n-int8.onnx",
-        modelSha256: ""
+        modelSha256: "ac165577e12c3fb930b7648b265053fa801011e659c11b7cda52fa8ee027589c"
     },
     storage: {
         clipsRoot: "~/Videos/SecurityLux",
