@@ -32,7 +32,7 @@ detection:
   enabled: false
   classes: ["person"]
   modelUrl: "https://github.com/JaredLodwick/SecurityLux/releases/download/models-v1/yolov8n-int8.onnx"
-  modelSha256: ""               # set non-empty to enable integrity checking
+  modelSha256: "ac165577e12c3fb930b7648b265053fa801011e659c11b7cda52fa8ee027589c"
 
   # Tuning knobs — also editable in the dashboard under Settings > Detection.
   fps: 2                        # detector ticks per second
