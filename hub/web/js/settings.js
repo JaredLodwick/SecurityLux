@@ -252,6 +252,7 @@
 
         container.appendChild(renderStats(stats));
         container.appendChild(renderUsageBar(stats));
+        if (stats.continuous) container.appendChild(renderContinuous(stats.continuous));
         if (stats.byCam && stats.byCam.length) container.appendChild(renderBreakdown(stats));
         container.appendChild(renderGroups({
             groups: ["storage"], values, overrides, onSaved
@@ -268,6 +269,70 @@
                 runway === null ? "—" : `${runway} days`,
                 "Runway at the current rate",
             )
+        ]);
+    }
+
+    /**
+     * The continuous reel, reported separately from event clips.
+     *
+     * The number that actually matters is "how far back can I go" — a GB figure
+     * doesn't tell you whether you can still see last Tuesday.
+     */
+    function renderContinuous(reel) {
+        if (!reel.segments) {
+            return el("div", { style: { marginBottom: "20px" } }, [
+                el("div.small.muted", {
+                    html: "Continuous recording isn't storing anything yet. Turn on " +
+                          "<b>Record continuously</b> below to keep a rolling reel you can " +
+                          'scrub back through on the <a href="#/timeline" ' +
+                          'style="color:var(--accent)">Timeline</a>.'
+                })
+            ]);
+        }
+
+        const budgetBytes = (reel.maxGB || 0) * 1024 ** 3;
+        const usedPct = budgetBytes > 0
+            ? Math.min(100, (reel.bytes / budgetBytes) * 100)
+            : 0;
+        const protectedPct = budgetBytes > 0
+            ? Math.min(usedPct, (reel.protectedBytes / budgetBytes) * 100)
+            : 0;
+
+        return el("div", { style: { marginBottom: "20px" } }, [
+            el("div.small.muted", {
+                style: { marginBottom: "6px" },
+                text: budgetBytes > 0
+                    ? `Continuous footage: ${formatBytes(reel.bytes)} of the ` +
+                      `${reel.maxGB} GB budget · reaches back ${reel.coverageDays} days`
+                    : `Continuous footage: ${formatBytes(reel.bytes)} (no budget set)`
+            }),
+            el("div.storage-bar", [
+                el("div", {
+                    style: {
+                        width: `${Math.max(0, usedPct - protectedPct)}%`,
+                        background: "rgba(0, 255, 136, 0.55)"
+                    }
+                }),
+                el("div", {
+                    style: { width: `${protectedPct}%`, background: "rgba(110, 168, 255, 0.75)" }
+                })
+            ]),
+            el("div.storage-legend", [
+                el("span", [
+                    el("span.swatch", { style: { background: "rgba(0, 255, 136, 0.55)" } }),
+                    "Rolling footage (deleted oldest-first)"
+                ]),
+                reel.protectedSegments
+                    ? el("span", [
+                        el("span.swatch", { style: { background: "rgba(110, 168, 255, 0.75)" } }),
+                        `Saved — never deleted (${reel.protectedSegments} segment` +
+                        `${reel.protectedSegments === 1 ? "" : "s"}, ${formatBytes(reel.protectedBytes)})`
+                    ])
+                    : null,
+                reel.oldestMs
+                    ? el("span", { text: `Oldest: ${new Date(reel.oldestMs).toLocaleString()}` })
+                    : null
+            ])
         ]);
     }
 

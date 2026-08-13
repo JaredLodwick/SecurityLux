@@ -187,6 +187,7 @@
         renderBanners();
 
         switch (route.section) {
+            case "timeline": return renderTimelineView();
             case "events": return renderEventsView();
             case "profiles": return renderProfilesView();
             case "settings": return renderSettingsView();
@@ -329,6 +330,17 @@
         refresh();
     }
 
+    function renderTimelineView() {
+        // Rebuilt only on entry: the timeline owns its own refresh cadence and
+        // holds a playing <video>, which the 2 s status poll must not disturb.
+        if (mountedSection === "timeline") return;
+        mountedSection = "timeline";
+        clear(dom.view);
+        SL.timeline.render(dom.view, state.cams).catch((err) => {
+            clear(dom.view).appendChild(el("div.empty", { text: err.message }));
+        });
+    }
+
     function renderEventsView() {
         if (mountedSection !== "events") {
             mountedSection = "events";
@@ -396,6 +408,7 @@
             // A card is re-parented on navigation; an open panel would ride
             // along into the side rail where it doesn't fit.
             if (SL.controls) SL.controls.closeAll();
+            if (SL.timeline) SL.timeline.destroy();
             mountedSection = null;     // force a rebuild when the section changes
             renderCurrentView();
             fetchEvents(true).then(renderCurrentView).catch(() => { /* surfaced by the poll */ });

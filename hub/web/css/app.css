@@ -571,6 +571,97 @@ input.slider:focus-visible { box-shadow: 0 0 0 2px var(--accent-dim); }
 /* Used by the zone editor, which genuinely needs a dialog. */
 .modal.modal-wide { max-width: 900px; }
 
+/* ============================ Timeline ============================
+   Coverage is drawn as filled runs against an empty track, so a camera that
+   was down leaves a visible hole. "No footage here" and "nothing happened
+   here" must not look the same — only one of them means the camera failed. */
+
+#timeline-player {
+  background: #0a0a0b; border: 1px solid var(--border);
+  border-radius: var(--radius); overflow: hidden; margin-bottom: 14px;
+}
+.timeline-video {
+  width: 100%; max-height: 62vh; display: block; background: #000;
+}
+.timeline-empty {
+  padding: 40px 20px; text-align: center;
+  color: var(--text-muted); font-size: 0.88rem;
+}
+
+.timeline-playbar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 8px 12px; border-top: 1px solid var(--border);
+  font-size: 0.8rem;
+}
+.timeline-clock { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+
+.timeline-bar { position: relative; padding-top: 16px; user-select: none; }
+
+.timeline-ticks {
+  position: relative; height: 14px;
+  font-size: 0.64rem; color: var(--text-dim);
+}
+.timeline-tick {
+  position: absolute; transform: translateX(-50%);
+  font-variant-numeric: tabular-nums;
+}
+
+.timeline-track {
+  position: relative; height: 46px;
+  background: repeating-linear-gradient(
+    90deg, var(--rail) 0, var(--rail) 1px, #0e0e10 1px, #0e0e10 calc(100% / 24)
+  );
+  border: 1px solid var(--border); border-radius: 5px;
+  overflow: hidden; cursor: crosshair; touch-action: none;
+}
+
+.timeline-coverage {
+  position: absolute; top: 0; bottom: 0;
+  background: rgba(0, 255, 136, 0.32);
+  border-left: 1px solid rgba(0, 255, 136, 0.5);
+}
+.timeline-coverage[data-saved="true"] {
+  background: rgba(110, 168, 255, 0.4);
+  border-left-color: rgba(110, 168, 255, 0.75);
+}
+
+.timeline-event {
+  position: absolute; top: 0; bottom: 0; width: 2px;
+  background: var(--warn); cursor: pointer;
+  box-shadow: 0 0 5px rgba(224, 178, 76, 0.8);
+}
+.timeline-event:hover { width: 4px; }
+.timeline-event[data-behavior="loitering"],
+.timeline-event[data-behavior="offline"] { background: var(--error); }
+
+.timeline-selection {
+  position: absolute; top: 0; bottom: 0;
+  background: rgba(255, 255, 255, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+}
+
+.timeline-playhead {
+  position: absolute; top: -3px; bottom: -3px; width: 2px;
+  background: #fff; box-shadow: 0 0 6px rgba(255, 255, 255, 0.9);
+  pointer-events: none;
+}
+
+.timeline-legend {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  margin-top: 8px; font-size: 0.75rem; color: var(--text-muted);
+}
+.timeline-legend .swatch {
+  display: inline-block; width: 10px; height: 10px;
+  border-radius: 2px; margin-right: 6px; vertical-align: -1px;
+}
+.swatch-coverage { background: rgba(0, 255, 136, 0.45); }
+.swatch-saved { background: rgba(110, 168, 255, 0.6); }
+.swatch-event { background: var(--warn); }
+
+@media (max-width: 640px) {
+  .timeline-track { height: 56px; }   /* easier to hit with a thumb */
+}
+
 /* ============================ Modal ============================ */
 
 .modal-backdrop {
