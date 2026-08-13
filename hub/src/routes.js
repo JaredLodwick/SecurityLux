@@ -19,6 +19,7 @@ const {
 } = require("./http-util");
 const { validateZones } = require("./zones");
 const { describeEvent } = require("./describe");
+const { buildTimeline, resolveSeek, nextSegment } = require("./timeline");
 
 const WEB_ROOT = path.join(__dirname, "..", "web");
 
@@ -267,6 +268,104 @@ const ROUTES = [
                 return sendJson(res, 200, saved);
             });
         }
+    },
+
+    // ---- Timeline (continuous recording) ------------------------------
+    {
+        method: "GET", pattern: /^\/cam\/([^/]+)\/timeline$/,
+        handler: ({ hub, res, params, query }) => sendJson(res, 200, buildTimeline(hub.store, {
+            camId: params[0],
+            fromMs: numParam(query, "from"),
+            toMs: numParam(query, "to")
+        }))
+    },
+    {
+        // Which calendar days have footage — drives the day picker, and answers
+        // "how far back can I actually go" without loading any of it.
+        method: "GET", pattern: /^\/cam\/([^/]+)\/timeline\/days$/,
+        handler: ({ hub, res, params, query }) => sendJson(res, 200, {
+            cam_id: params[0],
+            days: hub.store.recordingDays(params[0], numParam(query, "limit") || 60)
+        })
+    },
+    {
+        // Resolve an instant to a file plus an offset. Answers "no footage
+        // here, nearest is N minutes away" rather than an empty player.
+        method: "GET", pattern: /^\/cam\/([^/]+)\/timeline\/seek$/,
+        handler: ({ hub, res, params, query }) => {
+            const atMs = numParam(query, "at");
+            if (atMs === undefined) return sendError(res, 400, "at=<epoch ms> is required");
+            return sendJson(res, 200, resolveSeek(hub.store, { camId: params[0], atMs }));
+        }
+    },
+    {
+        // What to play next, so review rolls through segment boundaries. Null
+        // at a real gap, so playback stops rather than silently jumping hours.
+        method: "GET", pattern: /^\/recordings\/(\d+)\/next$/,
+        handler: ({ hub, res, params }) =>
+            sendJson(res, 200, nextSegment(hub.store, Number(params[0])) || { recording_id: null })
+    },
+    {
+        method: "GET", pattern: /^\/recordings\/(\d+)\/video(?:\.mp4)?$/i,
+        handler: ({ hub, req, res, params }) => hub.serveRecording(Number(params[0]), req, res)
+    },
+    {
+        method: "GET", pattern: /^\/recordings\/(\d+)$/,
+        handler: ({ hub, res, params }) => {
+            const recording = hub.store.getRecording(Number(params[0]));
+            return recording
+                ? sendJson(res, 200, recording)
+                : sendError(res, 404, "recording not found");
+        }
+    },
+    {
+        // Save/unsave a single segment. Saved segments are exempt from the
+        // budget — this is the "unsaved clips get deleted" distinction.
+        method: "POST", pattern: /^\/recordings\/(\d+)\/protect$/,
+        handler: ({ hub, req, res, params }) => {
+            readJsonBody(req, (err, body) => {
+                if (err) return sendError(res, 400, err.message);
+                const wanted = !body || body.protected === undefined ? true : !!body.protected;
+                const label = body && body.label ? String(body.label).slice(0, 120) : null;
+                const ok = hub.store.setRecordingProtected(Number(params[0]), wanted, label);
+                if (!ok) return sendError(res, 404, "recording not found");
+                return sendJson(res, 200, hub.store.getRecording(Number(params[0])));
+            });
+        }
+    },
+    {
+        // Save a whole moment: protects every segment overlapping the window.
+        method: "POST", pattern: /^\/cam\/([^/]+)\/timeline\/save$/,
+        handler: ({ hub, req, res, params }) => {
+            const camId = params[0];
+            readJsonBody(req, (err, body) => {
+                if (err) return sendError(res, 400, err.message);
+                const fromMs = Number(body && body.fromMs);
+                const toMs = Number(body && body.toMs);
+                if (!isFinite(fromMs) || !isFinite(toMs) || toMs <= fromMs) {
+                    return sendError(res, 400, "fromMs and toMs are required, with toMs after fromMs");
+                }
+                const wanted = body.protected === undefined ? true : !!body.protected;
+                const label = body.label ? String(body.label).slice(0, 120) : null;
+                const changed = hub.store.protectRecordingRange(camId, fromMs, toMs, wanted, label);
+                return sendJson(res, 200, {
+                    ok: true,
+                    segments: changed,
+                    protected: wanted,
+                    // Saving protects whole segments, so the kept range is
+                    // usually a little wider than what was asked for. Say so
+                    // rather than letting it look like a bug.
+                    note: changed
+                        ? "Whole segments are saved, so the kept footage may extend slightly " +
+                          "beyond the range you selected."
+                        : "No footage found in that range."
+                });
+            });
+        }
+    },
+    {
+        method: "GET", pattern: /^\/cam\/([^/]+)\/continuous$/,
+        handler: ({ hub, res, params }) => sendJson(res, 200, hub.continuousStatusFor(params[0]))
     },
 
     // ---- Events -------------------------------------------------------

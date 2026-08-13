@@ -148,4 +148,86 @@ function round3(n) {
     return Math.round(n * 1000) / 1000;
 }
 
-module.exports = { STAGES, ILLUMINATE, DEFAULT_TTL_MS, buildLedCommand, refreshIntervalFor };
+// ======================================================================
+//  Hub-facing helpers
+//
+//  These take the hub rather than being methods on it, keeping every
+//  door-light concern in one file.
+// ======================================================================
+
+/**
+ * Send a stage to a camera's strip, remembering it so the refresh loop can keep
+ * the TTL alive while the stage is held.
+ */
+function sendStage(hub, camId, stage, opts) {
+    const cam = hub.cams.get(camId);
+    if (!cam) return { ok: false, error: `unknown camera "${camId}"` };
+    if (!hub.settings || !hub.settings.get("led.enabled", camId)) {
+        return { ok: false, error: `the door light is not enabled for "${camId}"` };
+    }
+    if (!cam.connected) return { ok: false, error: `camera "${camId}" is not connected` };
+
+    const msg = buildLedCommand(stage, {
+        brightness: hub.settings.get("led.brightness", camId),
+        idleGlow: hub.settings.get("led.idleGlow", camId),
+        illuminate: shouldIlluminate(hub, camId, stage),
+        ttlMs: opts && opts.ttlMs !== undefined ? opts.ttlMs : DEFAULT_TTL_MS,
+        test: opts && opts.test
+    });
+
+    const sent = hub.sendCommand(cam, msg);
+    if (sent) hub._ledState.set(camId, { stage, sentAt: Date.now(), ttlMs: msg.ttlMs });
+    return sent ? { ok: true } : { ok: false, error: "failed to send LED command" };
+}
+
+/** Push a camera its LED wiring config so it can initialise the strip. */
+function sendConfig(hub, camId) {
+    if (!hub.settings) return;
+    const cam = hub.cams.get(camId);
+    if (!cam) return;
+    hub.sendCommand(cam, {
+        type: "led_config",
+        enabled: hub.settings.get("led.enabled", camId),
+        count: hub.settings.get("led.count", camId),
+        maxBrightness: hub.settings.get("led.brightness", camId)
+    });
+}
+
+/** Night-time illumination override, when the camera has it switched on. */
+function shouldIlluminate(hub, camId, stage) {
+    if (stage <= 0) return false;
+    if (!hub.settings.get("led.illuminateOnEvent", camId)) return false;
+    // eslint-disable-next-line global-require
+    const { isDark } = require("./sun");
+    return isDark(
+        Date.now(),
+        hub.settings.get("system.latitude"),
+        hub.settings.get("system.longitude")
+    ) === true;
+}
+
+/**
+ * Re-send held stages before their TTL expires.
+ *
+ * Without this the camera would decay to idle every few seconds while someone
+ * is still at the door — the TTL is a dead-man's switch, so something has to
+ * keep feeding it.
+ */
+function startRefresh(hub, tickMs) {
+    const timer = setInterval(() => {
+        const now = Date.now();
+        for (const [camId, state] of hub._ledState) {
+            if (!state.stage || !state.ttlMs) continue;
+            if (now - state.sentAt < refreshIntervalFor(state.ttlMs)) continue;
+            sendStage(hub, camId, state.stage, {});
+        }
+    }, tickMs);
+    timer.unref?.();
+    return timer;
+}
+
+module.exports = {
+    STAGES, ILLUMINATE, DEFAULT_TTL_MS,
+    buildLedCommand, refreshIntervalFor,
+    sendStage, sendConfig, shouldIlluminate, startRefresh
+};

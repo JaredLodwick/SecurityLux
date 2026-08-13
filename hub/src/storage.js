@@ -184,12 +184,29 @@ class StorageManager {
         const byCam = this.store.clipBytesByCam();
         const eventCount = this.store.countEvents();
         const oldestEventMs = this.store.oldestEventMs();
+        const reel = this.store.recordingStats();
+        const reelByCam = this.store.recordingBytesByCam();
 
         return {
             clipsRoot: this.clipsRoot,
             totalBytes: disk.totalBytes,
             freeBytes: disk.freeBytes,
             diskStatsAvailable: disk.available,
+            continuous: {
+                segments: reel.segments || 0,
+                bytes: reel.bytes || 0,
+                protectedBytes: reel.protected_bytes || 0,
+                protectedSegments: reel.protected_segments || 0,
+                oldestMs: reel.oldest_ms || null,
+                newestMs: reel.newest_ms || null,
+                byCam: reelByCam,
+                maxGB: this.settings.get("storage.continuousMaxGB"),
+                // How far back the reel actually reaches. This is the number
+                // people care about — "can I still see last Tuesday?"
+                coverageDays: reel.oldest_ms
+                    ? Math.round(((reel.newest_ms || Date.now()) - reel.oldest_ms) / 86_400_000 * 10) / 10
+                    : 0
+            },
             clipBytes: clips.bytes,
             clipFiles: clips.files,
             byCam,
@@ -252,12 +269,19 @@ class StorageManager {
         const result = {
             rowsDeleted: 0,
             clipsDeleted: 0,
+            segmentsDeleted: 0,
             bytesReclaimed: 0,
             reason: [],
             recordingPaused: false
         };
 
         try {
+            // Order matters and encodes the policy: continuous footage is the
+            // disposable layer, so it is always reclaimed before anything
+            // touches event clips. Getting this backwards would mean a busy
+            // week silently pushed out the footage you actually wanted.
+            await this._sweepContinuousByAge(result);
+            await this._sweepContinuousByBudget(result);
             await this._sweepByAge(result);
             await this._sweepByBudget(result);
             await this._sweepByFreeSpace(result);
@@ -268,9 +292,10 @@ class StorageManager {
             this.lastSweepAt = Date.now();
             this.lastSweepResult = result;
 
-            if (result.rowsDeleted || result.clipsDeleted || manual) {
+            if (result.rowsDeleted || result.clipsDeleted || result.segmentsDeleted || manual) {
                 this.log.info(
                     `[hub] storage sweep: ${result.rowsDeleted} rows, ${result.clipsDeleted} clips, ` +
+                    `${result.segmentsDeleted} segments, ` +
                     `${formatBytes(result.bytesReclaimed)} reclaimed` +
                     (result.reason.length ? ` (${result.reason.join(", ")})` : "")
                 );
@@ -282,6 +307,90 @@ class StorageManager {
         } finally {
             this._sweeping = false;
         }
+    }
+
+    /**
+     * Age out continuous footage, if an age limit is set at all.
+     *
+     * Off by default — the budget is the primary control, because "how many
+     * days do I get" is a consequence of disk size and quality rather than
+     * something most people want to pin directly.
+     */
+    async _sweepContinuousByAge(result) {
+        const days = this.settings.get("storage.continuousRetentionDays");
+        if (!days || days <= 0) return;
+
+        const cutoff = Date.now() - days * 86_400_000;
+        const stale = this.store.recordingsOlderThan(cutoff);
+        if (!stale.length) return;
+
+        for (const recording of stale) {
+            result.bytesReclaimed += await this._unlinkRecording(recording);
+            result.segmentsDeleted = (result.segmentsDeleted || 0) + 1;
+        }
+        result.reason.push(`continuous older than ${days}d`);
+    }
+
+    /**
+     * Keep the reel inside its byte budget, oldest first.
+     *
+     * `evictableRecordings` excludes protected segments by construction, so
+     * saved moments can never be taken here — that distinction is the whole
+     * point of being able to save something.
+     */
+    async _sweepContinuousByBudget(result) {
+        const maxGB = this.settings.get("storage.continuousMaxGB");
+        if (!maxGB || maxGB <= 0) return;
+        const budget = maxGB * GB;
+
+        const stats = this.store.recordingStats();
+        if (!stats || stats.bytes <= budget) return;
+
+        let over = stats.bytes - budget;
+        const candidates = this.store.evictableRecordings();
+        let deleted = 0;
+
+        for (const recording of candidates) {
+            if (over <= 0) break;
+            const freed = await this._unlinkRecording(recording);
+            over -= freed || (recording.bytes || 0);
+            result.bytesReclaimed += freed;
+            deleted += 1;
+        }
+
+        result.segmentsDeleted = (result.segmentsDeleted || 0) + deleted;
+        result.reason.push(`continuous over ${maxGB} GB`);
+
+        // Everything left is protected and the reel is still over budget. Say
+        // so once — silently continuing to write past the budget is the kind
+        // of thing that fills a card weeks later.
+        if (over > 0) {
+            this.log.warn(
+                `[hub] continuous footage is ${formatBytes(over)} over its ${maxGB} GB budget ` +
+                "and everything remaining is saved. Unsave some footage or raise the budget."
+            );
+        }
+    }
+
+    /** Remove a segment's file and its row. Returns bytes actually freed. */
+    async _unlinkRecording(recording) {
+        let freed = 0;
+        const abs = this.resolveClipPath(recording.path);
+        if (abs) {
+            try {
+                const stat = await fsp.stat(abs);
+                await fsp.unlink(abs);
+                freed = stat.size;
+            } catch (err) {
+                if (err.code !== "ENOENT") {
+                    this.log.warn(`[hub] failed to unlink ${abs}: ${err.message}`);
+                }
+            }
+        }
+        // Drop the row even if the file was already gone, or a missing file
+        // would keep being "reclaimed" forever without freeing anything.
+        try { this.store.deleteRecording(recording.id); } catch (_) { /* ignore */ }
+        return freed;
     }
 
     async _sweepByAge(result) {
@@ -338,6 +447,22 @@ class StorageManager {
         if (disk.freeBytes >= floor) { this._resume(); return; }
 
         result.reason.push(`below ${minFreeGB} GB free`);
+
+        // Continuous footage first, for the same reason as the budget sweep:
+        // it is the layer you can afford to lose. Only once the reel is gone
+        // do we start taking event clips.
+        for (const recording of this.store.evictableRecordings()) {
+            const freed = await this._unlinkRecording(recording);
+            result.bytesReclaimed += freed;
+            result.segmentsDeleted += 1;
+            if (result.segmentsDeleted % 20 === 0) {
+                disk = await this.diskInfo();
+                if (disk.available && disk.freeBytes >= floor) break;
+            }
+        }
+
+        disk = await this.diskInfo();
+        if (disk.available && disk.freeBytes >= floor) { this._resume(); return; }
 
         const candidates = this.store.clipsOldestFirst();
         for (const row of candidates) {

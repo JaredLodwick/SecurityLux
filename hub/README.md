@@ -175,6 +175,14 @@ for the events dashboard. Config search order:
 | `POST` | `/cam/<id>/restart`       | Restart the camera's publisher service (~2 s). |
 | `POST` | `/cam/<id>/reboot`        | Reboot the camera Pi (~40 s; needs the installer's sudoers rule). |
 | `POST` | `/cam/<id>/led/test`      | Body `{"stage": 0-4}` — fire a door-light pattern to check wiring. |
+| `GET`  | `/cam/<id>/timeline`      | Coverage runs, segments and event markers for a window (`from`, `to` epoch ms). |
+| `GET`  | `/cam/<id>/timeline/days` | Calendar days that have footage — the day picker, and "how far back can I go". |
+| `GET`  | `/cam/<id>/timeline/seek` | `at=<epoch ms>` → which segment and what offset. Reports the nearest footage when the instant falls in a gap. |
+| `POST` | `/cam/<id>/timeline/save` | `{fromMs, toMs}` — protect every segment overlapping a range. |
+| `GET`  | `/cam/<id>/continuous`    | Whether the reel is running for this camera, and why not if it isn't. |
+| `GET`  | `/recordings/<id>/video.mp4` | A segment, with `Range` support (required for seeking). |
+| `GET`  | `/recordings/<id>/next`   | The following segment, or null at a real gap. |
+| `POST` | `/recordings/<id>/protect`| `{protected: bool}` — save or release one segment. |
 | `GET`  | `/cam/<id>/controls`      | Everything the image panel renders from: current framing, the V4L2 controls this camera reports supporting (with real ranges), stored values, and the effective output resolution. |
 | `PUT`  | `/cam/<id>/controls`      | Body `{ image?: {rotation, flipHorizontal, flipVertical, zoom, panX, panY}, values?: {control: number} }`. Framing and hardware controls in one request, since the panel edits both together. |
 | `POST` | `/cam/<id>/controls/reset`| Body `{"scope": "all"\|"image"\|"hardware"}` — back to defaults. |
@@ -261,6 +269,47 @@ appears to do nothing, clear the override in the UI to hand control back.
 Every setting is declared once in `src/settings.js` with its type, bounds,
 and help text; validation, the API, and the UI controls are all derived
 from that one declaration.
+
+## Continuous recording
+
+Off by default. Turn on **Record continuously** (Settings → Continuous
+recording) and each camera gets a long-lived ffmpeg writing rolling segments to
+`<clipsRoot>/continuous/<camId>/`, which the **Timeline** tab scrubs through.
+
+Two decisions carry the design:
+
+**Segments, not one long file.** Chunks are the unit of both eviction and
+seeking. A single growing file can't be partially deleted to reclaim space, and
+can't be played until it's closed.
+
+**A fixed frame rate, even when the camera goes quiet.** The pump emits exactly
+`continuous.fps` frames per second, repeating the last frame if nothing new has
+arrived. That is what makes video time equal wall-clock time, which is what
+makes "scrub to 14:32" land on 14:32 — seeking becomes
+`(wanted - segmentStart)` rather than an index lookup.
+
+Feeding only the frames that happen to arrive would look more efficient and
+would quietly break the feature: a camera that dropped to 3 fps for a minute
+would leave everything after it in that segment sitting at the wrong timestamp,
+drifting further the deeper you scrub. Repeated frames cost almost nothing —
+x264 encodes a static image as a handful of bytes.
+
+A camera that goes away is tolerated for 10 seconds by repeating its last
+frame, so a WiFi blip doesn't shred the recording. Past that the segment ends
+and a new one starts on return, leaving an honest gap on the timeline.
+
+Segment filenames are timestamps in a flat per-camera directory. A `YYYY-MM-DD/`
+sub-directory would read better, but the segment muxer doesn't create
+directories and has no option to (`-strftime_mkdir` belongs to the image2 muxer),
+so it fails at every midnight rollover.
+
+### Disk
+
+Around 1.2 GB per camera per day at the defaults, varying widely with scene
+activity. Budget is `storage.continuousMaxGB` (8 GB default). Continuous
+footage is **always evicted before event clips**, including in the low-disk
+emergency path, and protected ("saved") segments are never evicted at all —
+that distinction is the whole point of being able to save a moment.
 
 ## Image adjustments
 

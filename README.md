@@ -228,6 +228,44 @@ zone.
 
 ---
 
+## Going back in time
+
+Turn on **Record continuously** (Settings → Continuous recording) and the hub
+keeps a rolling reel of everything, not just detected events. The **Timeline**
+tab then lets you scrub back through it like a normal security system.
+
+- **Click anywhere on the bar** to jump to that moment.
+- **Green** is recorded footage, **gaps are real gaps** — a camera that was
+  down leaves a visible hole rather than quietly looking the same as a quiet
+  hour.
+- **Amber marks** are events. Click one to jump to it.
+- **Drag across the bar** to select a range, then **Save** it. Saved footage is
+  never deleted to make room; everything else rolls off oldest-first.
+
+Playback rolls from one segment into the next automatically, and stops at a
+real gap rather than silently skipping hours.
+
+### How much disk does it use?
+
+Roughly **1.2 GB per camera per day** at the defaults (8 fps, CRF 32), though
+it varies a lot with the scene — a still hallway compresses to a fraction of a
+busy street.
+
+The budget defaults to **8 GB**, which is about a week for one camera. Change
+it under Settings → Storage; the page shows how far back the reel currently
+reaches, which is the number that actually matters.
+
+Two things worth knowing before you turn it on:
+
+- **It's off by default**, because writing over a gigabyte a day to someone's
+  disk without asking would be rude.
+- **On an SD card, continuous recording will wear it out eventually.** A card
+  has finite write cycles and this writes constantly. It's fine for a while,
+  but if you want months of history, put `storage.clipsRoot` on a USB SSD.
+
+Lowering the frame rate is the most effective dial: 4 fps roughly halves the
+disk use and is still perfectly watchable for "what happened here".
+
 ## Storage
 
 The hub records to `~/Videos/SecurityLux/` and bounds it three ways, all
@@ -235,9 +273,15 @@ editable under **Settings → Storage**:
 
 | Limit | Default | What happens |
 |---|---|---|
+| Continuous footage budget | 8 GB | The rolling reel. Oldest is deleted first to make room for new. Saved moments are never taken |
 | Keep events for | 14 days | Older events and their video are deleted |
 | Clip storage budget | 16 GB | Oldest **video** is reclaimed first; the event rows survive, so you keep the history and lose only the footage |
 | Reserve free disk | 4 GB | A hard floor. Below it the hub prunes hard and, if that isn't enough, stops writing new clips while still logging events |
+
+**Continuous footage is always deleted before event clips**, including in the
+emergency low-disk path. The reel is the disposable layer — losing last
+Tuesday's uneventful afternoon is fine, losing the clip of someone at your door
+is not.
 
 Recording defaults to h264/mp4, which is roughly **13× smaller** than the
 MJPEG the camera sends (~2 MB/minute instead of ~27 MB/minute) and plays

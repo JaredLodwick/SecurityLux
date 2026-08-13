@@ -139,6 +139,8 @@ The camera only ever talks to one place (the hub), so security review is simple.
 | F23 | Nightly database backup | Seven rotating `VACUUM INTO` copies of `events.db`. Clips are re-recordable; zones, settings, and profiles are not. |
 | F24 | Event webhook | Optional outbound POST per finalized event, for ntfy / Home Assistant / a shell script. |
 | F25 | Image framing controls | Rotation (0/90/180/270), horizontal/vertical mirroring, and digital zoom with pan. Applied on the camera before the JPEG encode, so the live feed, the clips, and the detector all see the same corrected image. Short-circuits entirely when unset, so an unadjusted camera pays nothing. |
+| F27 | Continuous recording + timeline | Optional always-on reel per camera, written as rolling segments with a fixed frame rate so wall-clock time maps linearly onto video time. A scrubbable timeline shows coverage, gaps and event markers; playback rolls across segment boundaries and stops at real gaps. |
+| F28 | Saved moments | Any segment or time range can be protected. Protected footage is exempt from every eviction path, which is the distinction between the rolling reel and kept footage. |
 | F26 | Hardware image controls | Brightness, contrast, saturation, sharpness, gamma, gain, backlight compensation, exposure, white balance, and anti-flicker — discovered per camera via `v4l2-ctl` and applied by the driver, so they cost zero CPU. Only controls the camera reports are offered, with its real ranges; driver-inactive controls are greyed out. Values are stored on the hub and re-applied on reconnect, because V4L2 state is lost when a camera Pi reboots. |
 
 ## 6. Non-functional requirements
@@ -193,6 +195,14 @@ All consumer-facing endpoints live on the **hub** (`meer.local` in these example
 | `POST` | `/cam/<id>/led/test` | Fire a door-light pattern to check wiring |
 | `GET`/`PUT` | `/cam/<id>/settings` | Per-camera setting overrides |
 | `GET`/`PUT` | `/cam/<id>/zones` | Named zones for this camera |
+| `GET` | `/cam/<id>/timeline` | Coverage, segments and event markers for a window |
+| `GET` | `/cam/<id>/timeline/days` | Days with footage |
+| `GET` | `/cam/<id>/timeline/seek` | Resolve an instant to a segment + offset |
+| `POST` | `/cam/<id>/timeline/save` | Protect every segment in a range |
+| `GET` | `/cam/<id>/continuous` | Reel status for one camera |
+| `GET` | `/recordings/<id>/video.mp4` | A segment, with Range support |
+| `GET` | `/recordings/<id>/next` | Next segment, or null at a gap |
+| `POST` | `/recordings/<id>/protect` | Save/release one segment |
 | `GET`/`PUT` | `/cam/<id>/controls` | Image framing + hardware controls |
 | `POST` | `/cam/<id>/controls/reset` | Restore image defaults |
 | `POST` | `/cam/<id>/controls/refresh` | Re-probe what the camera supports |
@@ -550,6 +560,7 @@ Kept out of `requirements.txt` on purpose: `adafruit-blinka` binds to Raspberry 
 | **M15 — Door light** | done | SPI-driven NeoPixel on the camera Pi with five escalating patterns, TTL-based fail-dark, software brightness cap, and a wiring-test button. Degrades to a no-op with no hardware. |
 | **M16 — Remote camera control** | done | Restart and reboot from the UI, scoped sudoers rule, uptime + reconnect count surfaced per camera. |
 | **M17 — Browser-editable settings** | done | Schema-driven settings with per-camera overrides; API and UI generated from one declaration. |
+| **M19 — Continuous recording** | done | Always-on segmented reel per camera with a fixed-rate frame pump (so scrub position is exact), a timeline UI with coverage/gaps/event markers, save-a-moment protection, and a dedicated storage budget evicted ahead of event clips. Off by default. |
 | **M18 — Image adjustments** | done | Framing (rotation/mirror/zoom/pan) in software on the camera, plus per-camera V4L2 hardware controls discovered at runtime. Control panel opens over the live feed from a gear on the frame, so the picture stays visible while adjusting. Applied upstream of the encode so the feed, the clips, and the detector agree; hardware values persisted on the hub and re-applied on reconnect. |
 
 ## 14. Risks & open questions

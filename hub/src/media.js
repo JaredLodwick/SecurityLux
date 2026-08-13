@@ -156,6 +156,25 @@ function serveEventFile(hub, eventId, kind, req, res) {
     return serveFile(req, res, abs);
 }
 
+/**
+ * Serve a continuous-recording segment.
+ *
+ * Range support is not optional here: the timeline seeks by loading a segment
+ * and jumping to an offset, and a browser cannot seek a <video> the server
+ * won't serve ranges for — it would have to download the whole segment first.
+ */
+function serveRecording(hub, recordingId, req, res) {
+    if (!hub.store) return sendError(res, 503, "event store unavailable");
+
+    const recording = hub.store.getRecording(recordingId);
+    if (!recording) return sendError(res, 404, "recording not found");
+
+    const abs = hub.storage.resolveClipPath(recording.path);
+    if (!abs) return sendError(res, 400, "invalid path");
+
+    return serveFile(req, res, abs, { contentType: "video/mp4" });
+}
+
 /** Serve an enrolled face image. */
 function serveSampleImage(hub, sampleId, req, res) {
     if (!hub.store) return sendError(res, 503, "event store unavailable");
@@ -174,6 +193,7 @@ module.exports = {
     serveMjpeg,
     serveSnapshot,
     serveEventFile,
+    serveRecording,
     serveSampleImage,
     MJPEG_BOUNDARY,
     MJPEG_KEEPALIVE_MS

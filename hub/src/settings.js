@@ -33,6 +33,7 @@
 
 const GROUPS = {
     image: "Image",
+    continuous: "Continuous recording",
     recording: "Recording",
     storage: "Storage",
     detection: "Detection",
@@ -99,6 +100,42 @@ const SCHEMA = {
         group: "image", type: "float", default: 0, min: -1, max: 1, scope: "camera",
         label: "Pan vertically",
         help: "No effect at 1x zoom."
+    },
+
+    // ---- Continuous recording -----------------------------------------
+    //
+    // The always-on reel you scrub back through. Off by default: it writes
+    // around 1.2 GB per camera per day at these settings, and a fresh install
+    // shouldn't start consuming someone's disk without being asked.
+    "continuous.enabled": {
+        group: "continuous", type: "boolean", default: false, scope: "both",
+        label: "Record continuously",
+        help: "Records around the clock so you can go back and watch any moment, " +
+              "not just detected events. Old footage is deleted automatically to " +
+              "stay inside the storage budget — events and anything you've saved " +
+              "are never deleted to make room."
+    },
+    "continuous.fps": {
+        group: "continuous", type: "int", default: 8, min: 1, max: 30, scope: "both",
+        label: "Frame rate", unit: "fps",
+        help: "Lower means far less disk for the same number of days. 8 is smooth " +
+              "enough to follow what happened; 2-4 is fine if you mainly want a " +
+              "visual record and are short on space."
+    },
+    "continuous.crf": {
+        group: "continuous", type: "int", default: 32, min: 18, max: 45, scope: "both",
+        label: "Quality (CRF)",
+        help: "Lower is better quality and a bigger file. 32 is deliberately softer " +
+              "than event clips — this footage exists so you can go back and look, " +
+              "while events are the ones you keep."
+    },
+    "continuous.segmentMinutes": {
+        group: "continuous", type: "int", default: 5, min: 1, max: 30, scope: "both",
+        advanced: true,
+        label: "Segment length", unit: "min",
+        help: "Footage is stored in chunks of this length. Chunks are the unit of " +
+              "both deletion and seeking, so smaller means finer-grained cleanup " +
+              "and slightly more files."
     },
 
     // ---- Recording ----------------------------------------------------
@@ -179,6 +216,21 @@ const SCHEMA = {
         label: "Clip storage budget", unit: "GB",
         help: "When clips exceed this, the oldest are deleted first. The event log rows " +
               "survive — you keep the history, you lose the video. 0 disables the budget."
+    },
+    "storage.continuousMaxGB": {
+        group: "storage", type: "float", default: 8, min: 0, max: 8192, scope: "global",
+        label: "Continuous footage budget", unit: "GB",
+        help: "How much disk the always-on reel may use across all cameras. When it's " +
+              "full the oldest footage is deleted to make room for new. Saved moments " +
+              "and event clips are never taken. 0 disables the budget — only do that " +
+              "if something else is bounding the disk."
+    },
+    "storage.continuousRetentionDays": {
+        group: "storage", type: "int", default: 0, min: 0, max: 365, scope: "global",
+        advanced: true,
+        label: "Continuous age limit", unit: "days",
+        help: "Optionally also delete continuous footage older than this, even if the " +
+              "budget isn't full. 0 means age doesn't matter and only the budget applies."
     },
     "storage.minFreeGB": {
         group: "storage", type: "float", default: 4, min: 0, max: 1024, scope: "global",
