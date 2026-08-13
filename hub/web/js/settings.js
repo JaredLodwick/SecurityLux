@@ -21,6 +21,30 @@
         return schema;
     }
 
+    /**
+     * Which groups to render for a scope, derived from the schema.
+     *
+     * Deliberately not a hardcoded list. Adding `continuous.*` to the schema
+     * once already shipped a setting that existed in the API, validated
+     * correctly, and was simply never drawn — because three separate hardcoded
+     * group lists in this file didn't know about it. Deriving from the schema
+     * the page already fetches means a new group appears automatically.
+     *
+     * @param {"global"|"camera"} scope
+     * @param {string[]} [exclude]  Groups rendered elsewhere.
+     */
+    function groupsFor(scope, exclude = []) {
+        const seen = new Set();
+        for (const def of Object.values(schema.settings)) {
+            const usable = def.scope === "both"
+                || (scope === "camera" ? def.scope === "camera" : def.scope === "global");
+            if (usable) seen.add(def.group);
+        }
+        // GROUPS declaration order is the display order.
+        return Object.keys(schema.groups)
+            .filter((key) => seen.has(key) && !exclude.includes(key));
+    }
+
     // ---------------------------------------------------------------
     //  Controls
     // ---------------------------------------------------------------
@@ -173,7 +197,9 @@
             ])
         ]));
         container.appendChild(renderGroups({
-            groups: ["recording", "detection", "events", "system"],
+            // Storage has its own page; image framing lives behind the gear
+            // on the feed, where you can see what you're changing.
+            groups: groupsFor("global", ["storage", "image"]),
             values, overrides, onSaved
         }));
     }
@@ -406,7 +432,7 @@
         const { values, overrides } = await api.get(`/cam/${encodeURIComponent(camId)}/settings`);
         clear(container);
         container.appendChild(renderGroups({
-            groups: ["events", "detection", "recording", "led", "storage"],
+            groups: groupsFor("camera", ["image"]),
             values, overrides, camId, onSaved
         }));
     }
