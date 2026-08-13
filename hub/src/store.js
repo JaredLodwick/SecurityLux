@@ -15,6 +15,7 @@
  *   profiles      known people + clearance levels
  *   face_samples  enrolled face embeddings belonging to a profile
  *   cameras       last-known metadata per camera (first/last seen, reconnects)
+ *   recordings    continuous ("always on") video segments, oldest evicted first
  *
  * Schema changes go through MIGRATIONS and are tracked with `PRAGMA user_version`,
  * so an existing events.db upgrades in place rather than needing a wipe.
@@ -26,6 +27,9 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
+
+const recordings = require("./recordings");
+const people = require("./profiles-store");
 
 const QUERY_LIMIT_DEFAULT = 50;
 const QUERY_LIMIT_MAX = 500;
@@ -134,7 +138,39 @@ const MIGRATIONS = [
                 last_offline_alert_ms INTEGER
             );
         `);
-    }
+    },
+
+    // v4 — continuous ("always on") recording segments.
+    //
+    // Kept in its own table rather than reusing `events`. They are different
+    // things with different lifetimes: an event is something that happened and
+    // is worth keeping, a segment is a slice of wall-clock time that exists
+    // until the disk needs the space. Mixing them would mean every event query
+    // had to filter out thousands of segment rows.
+    (db) => {
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS recordings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                cam_id TEXT NOT NULL,
+                path TEXT NOT NULL UNIQUE,
+                started_at_ms INTEGER NOT NULL,
+                ended_at_ms INTEGER,
+                duration_ms INTEGER,
+                bytes INTEGER,
+                -- Set when the user saves a moment. Protected segments are
+                -- never reclaimed by the budget; that is the whole distinction
+                -- between "footage" and "kept footage".
+                protected INTEGER NOT NULL DEFAULT 0,
+                label TEXT,
+                created_at_ms INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_recordings_cam_started
+                ON recordings (cam_id, started_at_ms);
+            -- Eviction walks unprotected segments oldest-first, constantly.
+            CREATE INDEX IF NOT EXISTS idx_recordings_evictable
+                ON recordings (started_at_ms) WHERE protected = 0;
+        `);
+    },
 ];
 
 function expandHome(p) {
@@ -467,6 +503,30 @@ class Store {
     }
 
     // ==================================================================
+    //  Continuous recording segments — thin delegates over recordings.js
+    // ==================================================================
+
+    insertRecording (args) { return recordings.insertRecording(this.db, args); }
+    getRecording (id) { return recordings.getRecording(this.db, id); }
+    hasRecordingPath (relPath) { return recordings.hasRecordingPath(this.db, relPath); }
+    queryRecordings (opts) { return recordings.queryRecordings(this.db, opts); }
+    recordingAt (camId, atMs) { return recordings.recordingAt(this.db, camId, atMs); }
+    recordingDays (camId, limit) { return recordings.recordingDays(this.db, camId, limit); }
+    deleteRecording (id) { return recordings.deleteRecording(this.db, id); }
+    recordingStats (camId) { return recordings.recordingStats(this.db, camId); }
+    recordingBytesByCam () { return recordings.recordingBytesByCam(this.db); }
+    evictableRecordings (limit) { return recordings.evictableRecordings(this.db, limit); }
+    recordingsOlderThan (cutoffMs, opts) {
+        return recordings.recordingsOlderThan(this.db, cutoffMs, opts);
+    }
+    setRecordingProtected (id, isProtected, label) {
+        return recordings.setRecordingProtected(this.db, id, isProtected, label);
+    }
+    protectRecordingRange (camId, fromMs, toMs, isProtected, label) {
+        return recordings.protectRecordingRange(this.db, camId, fromMs, toMs, isProtected, label);
+    }
+
+    // ==================================================================
     //  Settings
     // ==================================================================
 
@@ -571,113 +631,19 @@ class Store {
     }
 
     // ==================================================================
-    //  Profiles + face samples
+    //  Profiles + face samples — thin delegates over profiles-store.js
     // ==================================================================
 
-    listProfiles() {
-        const rows = this.db.prepare(`
-            SELECT p.*, COUNT(f.id) AS sample_count
-              FROM profiles p
-              LEFT JOIN face_samples f ON f.profile_id = p.id
-             GROUP BY p.id
-             ORDER BY p.is_anonymous, p.name COLLATE NOCASE
-        `).all();
-        return rows.map(rowToProfile);
-    }
-
-    getProfile(id) {
-        const row = this.db.prepare(`
-            SELECT p.*, COUNT(f.id) AS sample_count
-              FROM profiles p
-              LEFT JOIN face_samples f ON f.profile_id = p.id
-             WHERE p.id = ?
-             GROUP BY p.id
-        `).get(id);
-        return row ? rowToProfile(row) : null;
-    }
-
-    createProfile({ name, clearance, notes, isAnonymous }) {
-        const info = this.db.prepare(`
-            INSERT INTO profiles (name, clearance, notes, is_anonymous, created_at_ms)
-            VALUES (?, ?, ?, ?, ?)
-        `).run(
-            name,
-            Number.isFinite(clearance) ? clearance : 0,
-            notes || null,
-            isAnonymous ? 1 : 0,
-            Date.now()
-        );
-        return this.getProfile(info.lastInsertRowid);
-    }
-
-    updateProfile(id, { name, clearance, notes, isAnonymous }) {
-        const existing = this.getProfile(id);
-        if (!existing) return null;
-        this.db.prepare(`
-            UPDATE profiles
-               SET name = ?, clearance = ?, notes = ?, is_anonymous = ?
-             WHERE id = ?
-        `).run(
-            name !== undefined ? name : existing.name,
-            clearance !== undefined ? clearance : existing.clearance,
-            notes !== undefined ? notes : existing.notes,
-            isAnonymous !== undefined ? (isAnonymous ? 1 : 0) : (existing.is_anonymous ? 1 : 0),
-            id
-        );
-        return this.getProfile(id);
-    }
-
-    deleteProfile(id) {
-        // face_samples cascade via the FK; events keep their row but lose the
-        // attribution rather than disappearing.
-        this.db.prepare("UPDATE events SET profile_id = NULL WHERE profile_id = ?").run(id);
-        const info = this.db.prepare("DELETE FROM profiles WHERE id = ?").run(id);
-        return info.changes === 1;
-    }
-
-    listFaceSamples(profileId) {
-        return this.db.prepare(
-            "SELECT id, profile_id, image_path, source, event_id, created_at_ms, " +
-            "       (embedding IS NOT NULL) AS has_embedding " +
-            "  FROM face_samples WHERE profile_id = ? ORDER BY created_at_ms DESC"
-        ).all(profileId);
-    }
-
-    addFaceSample({ profileId, embedding, imagePath, source, eventId }) {
-        const info = this.db.prepare(`
-            INSERT INTO face_samples (profile_id, embedding, image_path, source, event_id, created_at_ms)
-            VALUES (?, ?, ?, ?, ?, ?)
-        `).run(
-            profileId,
-            embedding ? Buffer.from(embedding) : null,
-            imagePath || null,
-            source || "upload",
-            eventId ?? null,
-            Date.now()
-        );
-        return info.lastInsertRowid;
-    }
-
-    deleteFaceSample(id) {
-        const row = this.db.prepare("SELECT image_path FROM face_samples WHERE id = ?").get(id);
-        const info = this.db.prepare("DELETE FROM face_samples WHERE id = ?").run(id);
-        return info.changes === 1 ? (row ? row.image_path : null) : false;
-    }
-
-    /** Every embedding, for the recognizer to match against. */
-    allEmbeddings() {
-        return this.db.prepare(
-            "SELECT f.id, f.profile_id, f.embedding, p.name " +
-            "  FROM face_samples f JOIN profiles p ON p.id = f.profile_id " +
-            " WHERE f.embedding IS NOT NULL"
-        ).all();
-    }
-
-    recordSighting(profileId, atMs) {
-        this.db.prepare(
-            "UPDATE profiles SET sighting_count = sighting_count + 1, last_seen_ms = ? WHERE id = ?"
-        ).run(atMs, profileId);
-    }
+    listProfiles () { return people.listProfiles(this.db); }
+    getProfile (id) { return people.getProfile(this.db, id); }
+    createProfile (args) { return people.createProfile(this.db, args); }
+    updateProfile (id, args) { return people.updateProfile(this.db, id, args); }
+    deleteProfile (id) { return people.deleteProfile(this.db, id); }
+    listFaceSamples (profileId) { return people.listFaceSamples(this.db, profileId); }
+    addFaceSample (args) { return people.addFaceSample(this.db, args); }
+    deleteFaceSample (id) { return people.deleteFaceSample(this.db, id); }
+    allEmbeddings () { return people.allEmbeddings(this.db); }
+    recordSighting (profileId, atMs) { return people.recordSighting(this.db, profileId, atMs); }
 
     // ==================================================================
     //  Camera metadata
@@ -708,9 +674,9 @@ class Store {
     }
 }
 
-function clampLimit(limit) {
-    if (typeof limit !== "number" || !isFinite(limit) || limit <= 0) return QUERY_LIMIT_DEFAULT;
-    return Math.min(Math.floor(limit), QUERY_LIMIT_MAX);
+function clampLimit(limit, fallback = QUERY_LIMIT_DEFAULT, max = QUERY_LIMIT_MAX) {
+    if (typeof limit !== "number" || !isFinite(limit) || limit <= 0) return fallback;
+    return Math.min(Math.floor(limit), max);
 }
 
 function safeParse(json, fallback) {
@@ -749,20 +715,6 @@ function rowToZone(row) {
         kind: row.kind,
         points: safeParse(row.points_json, []),
         sortOrder: row.sort_order
-    };
-}
-
-function rowToProfile(row) {
-    return {
-        id: row.id,
-        name: row.name,
-        clearance: row.clearance,
-        notes: row.notes,
-        is_anonymous: !!row.is_anonymous,
-        sighting_count: row.sighting_count,
-        last_seen_ms: row.last_seen_ms,
-        sample_count: row.sample_count ?? 0,
-        created_at_ms: row.created_at_ms
     };
 }
 

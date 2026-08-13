@@ -34,7 +34,8 @@ const { Recorder } = require("./recorder");
 const { SessionManager } = require("./session");
 const { FrameBuffer } = require("./framebuffer");
 const { Recognizer } = require("./recognize");
-const { buildLedCommand, refreshIntervalFor, DEFAULT_TTL_MS } = require("./led");
+const continuous = require("./continuous");
+const led = require("./led");
 const { matchRoute } = require("./routes");
 const media = require("./media");
 const imageControls = require("./image-controls");
@@ -205,6 +206,10 @@ class HubServer {
             this.sendLedCommand(camId, 0, { ttlMs: 0 });
         }
 
+        // Before the store closes: stopping flushes and indexes each final
+        // segment, and indexing needs the database.
+        try { await this._stopAllContinuous("hub-stop"); } catch (_) { /* logged inside */ }
+
         if (this.sessionManager) {
             try { await this.sessionManager.forceEndAll("hub-stop"); } catch (_) { /* ignore */ }
         }
@@ -262,6 +267,7 @@ class HubServer {
                 reportedImage: null,
                 reportedResolution: null,
                 baseResolution: null,     // capture size before rotation
+                continuous: null,         // ContinuousRecorder, attached on first use
                 frameBuffer: new FrameBuffer({ seconds: preRoll, fps })
             };
             this.cams.set(camId, cam);
@@ -299,6 +305,8 @@ class HubServer {
         // brightness you tuned and leave a dark doorway dark.
         this._sendImageConfig(camId);
         this._sendHardwareControls(camId);
+
+        this._syncContinuous(cam);
 
         if (this.detector) this.detector.attachCam(cam);
 
@@ -360,6 +368,9 @@ class HubServer {
             cam.offlineSince = Date.now();
             cam.frameBuffer.clear();
             this.log.info(`cam disconnected: ${camId}`);
+            if (cam.continuous) {
+                cam.continuous.stop("cam-disconnected").catch(() => { /* logged inside */ });
+            }
             if (this.sessionManager) {
                 this.sessionManager.forceEnd(camId, "cam-disconnected")
                     .catch(() => { /* logged inside */ });
@@ -403,6 +414,7 @@ class HubServer {
             cam.frameBuffer.clear();
             this.sendLedCommand(camId, 0, { ttlMs: 0 });
         }
+        this._syncContinuous(cam);
     }
 
     // ==================================================================
@@ -440,6 +452,7 @@ class HubServer {
             led_stage: behavior ? behavior.stage : 0,
             person_count: behavior ? behavior.personCount : 0,
             session_active: this.sessionManager ? this.sessionManager.isActive(camId) : false,
+            continuous: this.continuousStatusFor(camId),
             connected_at: cam.connectedAt || null,
             reconnects: cam.reconnects
         };
@@ -566,39 +579,21 @@ class HubServer {
     }
 
     // ==================================================================
-    //  Door light
+    //  Door light — thin delegates over led.js
     // ==================================================================
 
-    _onBehaviorChange (camId, state) {
-        this.sendLedCommand(camId, state.stage, {});
-    }
+    _onBehaviorChange (camId, state) { this.sendLedCommand(camId, state.stage, {}); }
+    sendLedCommand (camId, stage, opts) { return led.sendStage(this, camId, stage, opts); }
+    _sendLedConfig (camId) { return led.sendConfig(this, camId); }
+    _startLedRefresh () { this._ledTimer = led.startRefresh(this, LED_TICK_MS); }
 
-    /**
-     * Send a stage to a camera's strip, remembering it so the refresh loop can
-     * keep the TTL alive while the stage is held.
-     */
-    sendLedCommand (camId, stage, opts) {
-        const cam = this.cams.get(camId);
-        if (!cam) return { ok: false, error: `unknown camera "${camId}"` };
-        if (!this.settings || !this.settings.get("led.enabled", camId)) {
-            return { ok: false, error: `the door light is not enabled for "${camId}"` };
-        }
-        if (!cam.connected) return { ok: false, error: `camera "${camId}" is not connected` };
+    // ==================================================================
+    //  Continuous recording — thin delegates over continuous.js
+    // ==================================================================
 
-        const msg = buildLedCommand(stage, {
-            brightness: this.settings.get("led.brightness", camId),
-            idleGlow: this.settings.get("led.idleGlow", camId),
-            illuminate: this._shouldIlluminate(camId, stage),
-            ttlMs: opts && opts.ttlMs !== undefined ? opts.ttlMs : DEFAULT_TTL_MS,
-            test: opts && opts.test
-        });
-
-        const sent = this.sendCommand(cam, msg);
-        if (sent) {
-            this._ledState.set(camId, { stage, sentAt: Date.now(), ttlMs: msg.ttlMs });
-        }
-        return sent ? { ok: true } : { ok: false, error: "failed to send LED command" };
-    }
+    _syncContinuous (cam) { return continuous.syncFor(this, cam); }
+    _stopAllContinuous (reason) { return continuous.stopAll(this, reason); }
+    continuousStatusFor (camId) { return continuous.statusFor(this, camId); }
 
     // ==================================================================
     //  Image adjustments — thin delegates over image-controls.js
@@ -614,49 +609,6 @@ class HubServer {
     _sendImageConfig (camId) { return imageControls.sendImageConfig(this, camId); }
     _sendHardwareControls (camId) { return imageControls.sendHardwareControls(this, camId); }
 
-    /** Push the camera its LED wiring config so it can init the strip. */
-    _sendLedConfig (camId) {
-        if (!this.settings) return;
-        const cam = this.cams.get(camId);
-        if (!cam) return;
-        this.sendCommand(cam, {
-            type: "led_config",
-            enabled: this.settings.get("led.enabled", camId),
-            count: this.settings.get("led.count", camId),
-            maxBrightness: this.settings.get("led.brightness", camId)
-        });
-    }
-
-    _shouldIlluminate (camId, stage) {
-        if (stage <= 0) return false;
-        if (!this.settings.get("led.illuminateOnEvent", camId)) return false;
-        // eslint-disable-next-line global-require
-        const { isDark } = require("./sun");
-        return isDark(
-            Date.now(),
-            this.settings.get("system.latitude"),
-            this.settings.get("system.longitude")
-        ) === true;
-    }
-
-    /**
-     * Re-send held stages before their TTL expires.
-     *
-     * Without this the camera would decay to idle every few seconds while
-     * someone is still standing at the door — the TTL is a dead-man's switch,
-     * so something has to keep feeding it.
-     */
-    _startLedRefresh () {
-        this._ledTimer = setInterval(() => {
-            const now = Date.now();
-            for (const [camId, state] of this._ledState) {
-                if (!state.stage || !state.ttlMs) continue;
-                if (now - state.sentAt < refreshIntervalFor(state.ttlMs)) continue;
-                this.sendLedCommand(camId, state.stage, {});
-            }
-        }, LED_TICK_MS);
-        this._ledTimer.unref?.();
-    }
 
     // ==================================================================
     //  Event log — thin delegates over event-log.js
@@ -683,6 +635,10 @@ class HubServer {
 
     serveSampleImage (sampleId, req, res) {
         return media.serveSampleImage(this, sampleId, req, res);
+    }
+
+    serveRecording (recordingId, req, res) {
+        return media.serveRecording(this, recordingId, req, res);
     }
 
     serveSnapshot (camId, res) {
@@ -721,6 +677,12 @@ class HubServer {
 
         if (changed.some((k) => k.startsWith("led."))) {
             for (const camId of this.cams.keys()) this._sendLedConfig(camId);
+        }
+
+        // fps and quality are baked into the running ffmpeg, so the recorder
+        // has to be cycled for a change to take effect at all.
+        if (changed.some((k) => k.startsWith("continuous."))) {
+            continuous.reconfigureAll(this);
         }
 
         // Geometry changes apply on the camera's very next frame, which is what
@@ -790,10 +752,10 @@ class HubServer {
 
 /** Routes that can't do anything useful without the database. */
 function needsStore (pathname) {
-    return /^\/(events|settings|storage|profiles|recognition)/.test(pathname)
+    return /^\/(events|settings|storage|profiles|recognition|recordings)/.test(pathname)
         // Image controls read settings and the stored V4L2 values, so they need
         // the database just as much as the routes above.
-        || /^\/cam\/[^/]+\/(events|zones|settings|controls)(\/|$)/.test(pathname);
+        || /^\/cam\/[^/]+\/(events|zones|settings|controls|timeline|continuous)(\/|$)/.test(pathname);
 }
 
 module.exports = { HubServer };

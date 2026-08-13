@@ -280,6 +280,121 @@ test("Store: hardware controls survive a reopen and never collide with settings"
     }
 });
 
+test("Store: continuous segments index, query and evict in order", () => {
+    const { path: dbPath, dir } = tmpDb();
+    try {
+        const store = new Store({ dbPath, logger: silentLog }).open();
+        const base = Date.now() - 3_600_000;
+
+        const ids = [0, 1, 2].map((i) => store.insertRecording({
+            camId: "front",
+            path: `continuous/front/seg-${i}.mp4`,
+            startedAtMs: base + i * 300_000,
+            endedAtMs: base + (i + 1) * 300_000,
+            bytes: 1000 * (i + 1)
+        }));
+
+        // Re-indexing is expected — the indexer re-scans the directory
+        // periodically and must not create duplicates.
+        store.insertRecording({
+            camId: "front", path: "continuous/front/seg-0.mp4",
+            startedAtMs: base, endedAtMs: base + 300_000, bytes: 1234
+        });
+        assert.equal(store.recordingStats().segments, 3, "re-indexing must be idempotent");
+        assert.equal(store.getRecording(ids[0]).bytes, 1234, "but it does refresh the size");
+
+        // Overlap, not containment: a window starting mid-segment must still
+        // find it, or scrubbing to 10:32 would miss the segment from 10:30.
+        const mid = store.queryRecordings({
+            camId: "front", fromMs: base + 400_000, toMs: base + 450_000
+        });
+        assert.equal(mid.length, 1);
+        assert.equal(mid[0].id, ids[1]);
+
+        assert.equal(store.recordingAt("front", base + 150_000).id, ids[0]);
+        assert.equal(store.recordingAt("front", base + 99_000_000), null);
+
+        // Eviction order is oldest-first.
+        assert.deepEqual(store.evictableRecordings().map((r) => r.id), ids);
+
+        store.deleteRecording(ids[0]);
+        assert.equal(store.getRecording(ids[0]), null);
+        assert.equal(store.recordingStats().segments, 2);
+
+        store.close();
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});
+
+test("Store: saved segments are excluded from eviction but still counted", () => {
+    // Saved footage has to stay visible in usage totals — otherwise the budget
+    // silently under-reports and the disk fills anyway.
+    const { path: dbPath, dir } = tmpDb();
+    try {
+        const store = new Store({ dbPath, logger: silentLog }).open();
+        const base = Date.now() - 600_000;
+
+        const keep = store.insertRecording({
+            camId: "front", path: "c/keep.mp4",
+            startedAtMs: base, endedAtMs: base + 300_000, bytes: 5000
+        });
+        const roll = store.insertRecording({
+            camId: "front", path: "c/roll.mp4",
+            startedAtMs: base + 300_000, endedAtMs: base + 600_000, bytes: 7000
+        });
+
+        store.setRecordingProtected(keep, true, "someone at the door");
+
+        assert.deepEqual(store.evictableRecordings().map((r) => r.id), [roll]);
+
+        const stats = store.recordingStats();
+        assert.equal(stats.segments, 2);
+        assert.equal(stats.bytes, 12_000, "saved bytes still count toward usage");
+        assert.equal(stats.protected_bytes, 5000);
+        assert.equal(stats.protected_segments, 1);
+        assert.equal(store.getRecording(keep).label, "someone at the door");
+
+        // Releasing puts it back in the eviction pool.
+        store.setRecordingProtected(keep, false);
+        assert.equal(store.evictableRecordings().length, 2);
+
+        store.close();
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});
+
+test("Store: saving a range protects every segment it overlaps", () => {
+    const { path: dbPath, dir } = tmpDb();
+    try {
+        const store = new Store({ dbPath, logger: silentLog }).open();
+        const base = 1_700_000_000_000;
+
+        for (let i = 0; i < 4; i += 1) {
+            store.insertRecording({
+                camId: "front", path: `c/${i}.mp4`,
+                startedAtMs: base + i * 300_000,
+                endedAtMs: base + (i + 1) * 300_000,
+                bytes: 1000
+            });
+        }
+
+        // A range landing inside segments 1 and 2.
+        const changed = store.protectRecordingRange(
+            "front", base + 400_000, base + 700_000, true, "kept"
+        );
+        assert.equal(changed, 2);
+
+        const saved = store.evictableRecordings();
+        assert.equal(saved.length, 2, "the two overlapped segments came out of the pool");
+
+        store.close();
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});
+
 test("Store: migrates an existing v1 database in place", () => {
     // An installed hub upgrading must not need its events.db wiped.
     const { path: dbPath, dir } = tmpDb();

@@ -237,6 +237,157 @@ test("overlapping sweeps collapse into one", async () => {
     } finally { h.cleanup(); }
 });
 
+// ---------------------------------------------------------------
+//  Continuous footage eviction
+// ---------------------------------------------------------------
+
+/** Write a continuous segment file and its row. */
+function addSegment(h, { camId = "front", ageMinutes = 0, bytes = MB, isProtected = false } = {}) {
+    const startedAt = Date.now() - ageMinutes * 60_000;
+    const day = new Date(startedAt).toISOString().slice(0, 10);
+    const rel = path.join("continuous", camId, day, `${startedAt}.mp4`);
+    const abs = path.join(h.clipsRoot, rel);
+
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, Buffer.alloc(bytes, 9));
+
+    const id = h.store.insertRecording({
+        camId, path: rel, startedAtMs: startedAt, endedAtMs: startedAt + 300_000, bytes
+    });
+    if (isProtected) h.store.setRecordingProtected(id, true);
+    return { id, rel };
+}
+
+test("continuous footage is evicted oldest-first when over budget", async () => {
+    const h = makeHarness({
+        "storage.retentionDays": 0, "storage.maxTotalGB": 0, "storage.minFreeGB": 0,
+        "storage.continuousMaxGB": 3 / 1024        // 3 MB
+    });
+    try {
+        const oldest = addSegment(h, { ageMinutes: 60, bytes: 2 * MB });
+        const newest = addSegment(h, { ageMinutes: 5, bytes: 2 * MB });
+
+        const result = await h.storage.sweep();
+
+        assert.ok(result.segmentsDeleted >= 1);
+        assert.equal(h.exists(oldest.rel), false, "oldest goes first");
+        assert.equal(h.exists(newest.rel), true, "newest is kept");
+        assert.equal(h.store.getRecording(oldest.id), null, "its row goes too");
+    } finally { h.cleanup(); }
+});
+
+test("saved segments are never taken by the budget", async () => {
+    // This is the entire distinction between footage and kept footage.
+    const h = makeHarness({
+        "storage.retentionDays": 0, "storage.maxTotalGB": 0, "storage.minFreeGB": 0,
+        "storage.continuousMaxGB": 1 / 1024
+    });
+    try {
+        const saved = addSegment(h, { ageMinutes: 120, bytes: 2 * MB, isProtected: true });
+        const ordinary = addSegment(h, { ageMinutes: 90, bytes: 2 * MB });
+
+        await h.storage.sweep();
+
+        assert.equal(h.exists(saved.rel), true, "a saved segment survives even though it's oldest");
+        assert.equal(h.exists(ordinary.rel), false);
+        assert.ok(h.store.getRecording(saved.id));
+    } finally { h.cleanup(); }
+});
+
+test("continuous footage is reclaimed before event clips", async () => {
+    // The policy: the reel is the disposable layer. Getting this backwards
+    // would let a busy week push out the footage you actually wanted.
+    const h = makeHarness({
+        "storage.retentionDays": 0, "storage.maxTotalGB": 0, "storage.minFreeGB": 100
+    });
+    try {
+        const clip = h.addClip({ ageDays: 30, bytes: 2 * MB });
+        const segment = addSegment(h, { ageMinutes: 10, bytes: 2 * MB });
+
+        // Pretend the disk is critically full so the emergency path runs.
+        let free = 1 * GB;
+        h.storage.diskInfo = async () => ({
+            totalBytes: 64 * GB, freeBytes: free, available: true
+        });
+        // Freeing the segment is enough to clear the floor.
+        const originalUnlink = h.storage._unlinkRecording.bind(h.storage);
+        h.storage._unlinkRecording = async (rec) => {
+            const freed = await originalUnlink(rec);
+            free = 200 * GB;
+            return freed;
+        };
+
+        await h.storage.sweep();
+
+        assert.equal(h.exists(segment.rel), false, "continuous went first");
+        assert.equal(h.exists(clip.clipRel), true, "the event clip survived");
+        assert.ok(h.store.getEvent(clip.id));
+    } finally { h.cleanup(); }
+});
+
+test("a continuous age limit removes old footage even when under budget", async () => {
+    const h = makeHarness({
+        "storage.retentionDays": 0, "storage.maxTotalGB": 0, "storage.minFreeGB": 0,
+        "storage.continuousMaxGB": 100, "storage.continuousRetentionDays": 1
+    });
+    try {
+        const old = addSegment(h, { ageMinutes: 60 * 48, bytes: MB });   // two days
+        const fresh = addSegment(h, { ageMinutes: 30, bytes: MB });
+
+        await h.storage.sweep();
+
+        assert.equal(h.exists(old.rel), false);
+        assert.equal(h.exists(fresh.rel), true);
+    } finally { h.cleanup(); }
+});
+
+test("a continuous budget of 0 disables eviction entirely", async () => {
+    const h = makeHarness({
+        "storage.retentionDays": 0, "storage.maxTotalGB": 0, "storage.minFreeGB": 0,
+        "storage.continuousMaxGB": 0
+    });
+    try {
+        const segment = addSegment(h, { ageMinutes: 500, bytes: 4 * MB });
+        await h.storage.sweep();
+        assert.equal(h.exists(segment.rel), true);
+    } finally { h.cleanup(); }
+});
+
+test("a segment whose file already vanished still loses its row", async () => {
+    // Otherwise it would be "reclaimed" on every sweep forever without ever
+    // freeing a byte, and the budget could never be satisfied.
+    const h = makeHarness({
+        "storage.retentionDays": 0, "storage.maxTotalGB": 0, "storage.minFreeGB": 0,
+        "storage.continuousMaxGB": 1 / 1024
+    });
+    try {
+        const ghost = addSegment(h, { ageMinutes: 90, bytes: 2 * MB });
+        fs.unlinkSync(path.join(h.clipsRoot, ghost.rel));
+        addSegment(h, { ageMinutes: 10, bytes: 2 * MB });
+
+        await h.storage.sweep();
+        assert.equal(h.store.getRecording(ghost.id), null);
+    } finally { h.cleanup(); }
+});
+
+test("storage stats report the reel separately from event clips", async () => {
+    const h = makeHarness({ "storage.continuousMaxGB": 12 });
+    try {
+        h.addClip({ bytes: MB });
+        addSegment(h, { ageMinutes: 30, bytes: 2 * MB });
+        addSegment(h, { ageMinutes: 10, bytes: 2 * MB, isProtected: true });
+
+        const stats = await h.storage.stats();
+
+        assert.equal(stats.continuous.segments, 2);
+        assert.equal(stats.continuous.bytes, 4 * MB);
+        assert.equal(stats.continuous.protectedSegments, 1);
+        assert.equal(stats.continuous.protectedBytes, 2 * MB);
+        assert.equal(stats.continuous.maxGB, 12);
+        assert.ok(stats.continuous.oldestMs);
+    } finally { h.cleanup(); }
+});
+
 test("formatBytes is readable at every scale", () => {
     assert.equal(formatBytes(0), "0 B");
     assert.equal(formatBytes(512), "512 B");

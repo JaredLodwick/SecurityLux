@@ -566,6 +566,134 @@ test("end to end: image settings are kept for a camera that is offline", async (
     }
 });
 
+test("end to end: the timeline API serves coverage, seeking and saving", async () => {
+    // Segments are inserted directly rather than recorded: real ffmpeg
+    // segmenting is verified by hand (it needs minutes of wall-clock time to
+    // produce anything), while this pins the HTTP contract the UI depends on.
+    const { hub, port, cleanup } = await boot();
+    try {
+        const base = Date.now() - 3_600_000;
+        const clipsRoot = hub.clipsRoot;
+        const ids = [];
+
+        for (let i = 0; i < 4; i += 1) {
+            // A real (tiny) mp4 so the serving path is exercised for real.
+            const rel = path.join("continuous", "front", `seg-${i}.mp4`);
+            const abs = path.join(clipsRoot, rel);
+            fs.mkdirSync(path.dirname(abs), { recursive: true });
+            fs.writeFileSync(abs, Buffer.alloc(2048, i + 1));
+
+            ids.push(hub.store.insertRecording({
+                camId: "front",
+                path: rel,
+                // Segments 0-1 are contiguous; then a 30-minute gap; then 2-3.
+                startedAtMs: base + (i < 2 ? i * 300_000 : 1_800_000 + i * 300_000),
+                endedAtMs: base + (i < 2 ? (i + 1) * 300_000 : 1_800_000 + (i + 1) * 300_000),
+                bytes: 2048
+            }));
+        }
+
+        // ---- coverage -------------------------------------------------
+        const timeline = await request(
+            port, "GET",
+            `/cam/front/timeline?from=${base - 1000}&to=${base + 4_000_000}`
+        );
+        assert.equal(timeline.status, 200);
+        assert.equal(timeline.json.segments.length, 4);
+        assert.equal(timeline.json.coverage.length, 2, "the gap must split coverage in two");
+        assert.equal(timeline.json.total_bytes, 4 * 2048);
+
+        // ---- seeking --------------------------------------------------
+        const hit = await request(port, "GET", `/cam/front/timeline/seek?at=${base + 120_000}`);
+        assert.equal(hit.json.found, true);
+        assert.equal(hit.json.recording_id, ids[0]);
+        assert.equal(hit.json.offset_seconds, 120, "offset is elapsed time into the segment");
+
+        const miss = await request(port, "GET", `/cam/front/timeline/seek?at=${base + 900_000}`);
+        assert.equal(miss.json.found, false);
+        assert.ok(miss.json.nearest, "a gap should still offer somewhere to jump");
+
+        const noParam = await request(port, "GET", "/cam/front/timeline/seek");
+        assert.equal(noParam.status, 400);
+
+        // ---- rolling into the next segment -----------------------------
+        const next = await request(port, "GET", `/recordings/${ids[0]}/next`);
+        assert.equal(next.json.recording_id, ids[1]);
+
+        const acrossGap = await request(port, "GET", `/recordings/${ids[1]}/next`);
+        assert.equal(acrossGap.json.recording_id, null, "playback must stop at a real gap");
+
+        // ---- serving, with Range (required for seeking in a browser) ----
+        const video = await get(port, `/recordings/${ids[0]}/video.mp4`);
+        assert.equal(video.status, 200);
+        assert.equal(video.headers["content-type"], "video/mp4");
+        assert.equal(video.headers["accept-ranges"], "bytes");
+        assert.equal(video.body.length, 2048);
+
+        const missing = await get(port, "/recordings/9999/video.mp4");
+        assert.equal(missing.status, 404);
+
+        // ---- saving a moment -------------------------------------------
+        const saved = await request(port, "POST", "/cam/front/timeline/save", {
+            fromMs: base + 60_000, toMs: base + 360_000, protected: true
+        });
+        assert.equal(saved.status, 200);
+        assert.equal(saved.json.segments, 2, "both overlapped segments are kept");
+
+        assert.equal(hub.store.getRecording(ids[0]).protected, true);
+        assert.equal(hub.store.getRecording(ids[1]).protected, true);
+        assert.equal(hub.store.getRecording(ids[2]).protected, false);
+
+        // Saved segments must drop out of the eviction pool entirely.
+        const evictable = hub.store.evictableRecordings().map((r) => r.id);
+        assert.deepEqual(evictable, [ids[2], ids[3]]);
+
+        const badRange = await request(port, "POST", "/cam/front/timeline/save", {
+            fromMs: base + 1000, toMs: base
+        });
+        assert.equal(badRange.status, 400);
+
+        // ---- one segment at a time --------------------------------------
+        const released = await request(port, "POST", `/recordings/${ids[0]}/protect`, {
+            protected: false
+        });
+        assert.equal(released.json.protected, false);
+
+        // ---- days -------------------------------------------------------
+        const days = await request(port, "GET", "/cam/front/timeline/days");
+        assert.equal(days.status, 200);
+        assert.ok(days.json.days.length >= 1);
+        assert.ok(days.json.days[0].segments > 0);
+
+        // ---- storage accounting ------------------------------------------
+        const storage = await request(port, "GET", "/storage");
+        assert.equal(storage.json.continuous.segments, 4);
+        assert.equal(storage.json.continuous.bytes, 4 * 2048);
+        assert.equal(storage.json.continuous.protectedSegments, 1);
+    } finally {
+        await cleanup();
+    }
+});
+
+test("end to end: continuous status reports why it isn't running", async () => {
+    const { port, cleanup } = await boot();
+    let cam;
+    try {
+        cam = await connectCamera(port, "front");
+        await wait(300);
+
+        // Off by default — a fresh install must not start writing a gigabyte a
+        // day without being asked.
+        const off = await request(port, "GET", "/cam/front/continuous");
+        assert.equal(off.status, 200);
+        assert.equal(off.json.enabled, false);
+        assert.equal(off.json.running, false);
+    } finally {
+        if (cam) cam.stop();
+        await cleanup();
+    }
+});
+
 test("end to end: remote camera commands reach the camera", async () => {
     const { port, cleanup } = await boot();
     let cam;

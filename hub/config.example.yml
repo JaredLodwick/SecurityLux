@@ -63,6 +63,27 @@ recording:
   graceMs: 1500          # absence this long ends the event
   retentionDays: 14      # delete events + clips older than this
 
+# --- Continuous ("always on") recording ---
+# Off by default. When enabled, each camera writes a rolling reel you can scrub
+# back through on the dashboard's Timeline tab — a normal DVR, rather than only
+# keeping clips of detected events.
+#
+# Roughly 1.2 GB per camera per day at these settings, though it varies a lot
+# with how busy the scene is. The budget (storage.continuousMaxGB, editable in
+# the UI) caps it; oldest footage is deleted first to make room for new, and
+# anything you've saved is never deleted.
+#
+# On an SD card this will wear the card eventually — it writes constantly. For
+# months of history, point storage.clipsRoot at a USB SSD.
+#
+# All of these are editable in the dashboard under Settings > Continuous
+# recording, and can be overridden per camera.
+continuous:
+  enabled: false
+  fps: 8            # lower is dramatically cheaper; 4 is still watchable
+  crf: 32           # deliberately softer than event clips
+  segmentMinutes: 5 # chunk size — the unit of both deletion and seeking
+
 storage:
   clipsRoot: "~/Videos/SecurityLux"        # clips + thumbnails, organized by date
   dbPath: "~/.securityluxhub/events.db"    # SQLite: events, settings, zones, profiles
@@ -77,6 +98,11 @@ storage:
   #
   # Defaults are 16 GB and 4 GB. On a 64 GB card those are sensible; on a
   # dedicated 1 TB disk you'll want to raise maxTotalGB considerably.
+  #
+  #   continuousMaxGB  budget for the always-on reel (default 8 GB). Continuous
+  #                    footage is ALWAYS evicted before event clips, including
+  #                    in the low-disk emergency path — the reel is the layer
+  #                    you can afford to lose.
 
 logging:
   level: info            # debug | info | warn | error
