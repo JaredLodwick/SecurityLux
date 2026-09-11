@@ -105,4 +105,10 @@ storage:
   #                    you can afford to lose.
 
 logging:
-  level: info            # debug | info | warn | error
+  level: info            # debug | info | warn | error — also editable live from
+                         # Settings -> System, no restart needed
+  dir: ~/.securityluxhub/logs   # one file per category: system.log, motion.log,
+                                 # recording.log — see hub/README.md § Logs
+  maxFileSizeMb: 10      # a category's file rotates (keeping maxBackupFiles copies)
+                         # once it passes this size
+  maxBackupFiles: 3

@@ -540,19 +540,22 @@ function clampNumber(n, lo, hi, fallback) {
 function syncFor(hub, cam) {
     if (!cam || !hub.settings || !hub.store) return;
 
+    const recordingLog = (hub.log && typeof hub.log.forCategory === "function")
+        ? hub.log.forCategory("recording") : hub.log;
+
     if (!cam.continuous) {
         cam.continuous = new ContinuousRecorder({
             cam,
             settings: hub.settings,
             store: hub.store,
             clipsRoot: hub.clipsRoot,
-            logger: hub.log
+            logger: recordingLog
         });
     }
     try {
         cam.continuous.sync();
     } catch (err) {
-        hub.log.warn(`[hub] continuous sync failed for ${cam.id}: ${err && err.message}`);
+        recordingLog.warn(`[hub] continuous sync failed for ${cam.id}: ${err && err.message}`);
     }
 }
 

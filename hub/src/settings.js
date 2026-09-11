@@ -369,6 +369,13 @@ const SCHEMA = {
         group: "system", type: "float", default: 0, min: -180, max: 180, scope: "global",
         advanced: true,
         label: "Longitude"
+    },
+    "system.logLevel": {
+        group: "system", type: "enum", values: ["debug", "info", "warn", "error"], default: "info",
+        scope: "global", yamlPath: "logging.level",
+        label: "Log level",
+        help: "Applies immediately, no restart needed. \"debug\" is very chatty — turn it on " +
+              "while chasing a problem, then back off to \"info\"."
     }
 };
 
