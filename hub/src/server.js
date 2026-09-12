@@ -43,6 +43,8 @@ const eventLog = require("./event-log");
 const enrollment = require("./enrollment");
 const { sendError } = require("./http-util");
 
+const HUB_VERSION = require("../package.json").version;
+
 const STATUS_STALE_MS = 30_000;
 const DETECTION_FRESH_MS = 1500;
 const OFFLINE_CHECK_MS = 60_000;
@@ -55,6 +57,16 @@ const LED_TICK_MS = 2000;
  * effectively unfindable. Refusing to write is better than corrupting the log.
  */
 const MIN_SANE_CLOCK_MS = Date.UTC(2024, 0, 1);
+
+/**
+ * `this.log.forCategory(name)` when the logger supports it (log.js does);
+ * otherwise fall back to the logger as-is. Keeps tests and any other caller
+ * that hands in a plain `console` (or a stub without categories) working
+ * exactly as before, just without the file-per-category split.
+ */
+function categoryLogger (base, name) {
+    return (base && typeof base.forCategory === "function") ? base.forCategory(name) : base;
+}
 
 class HubServer {
     constructor (cfg, log) {
@@ -177,17 +189,23 @@ class HubServer {
 
         this.recognizer = new Recognizer({ store: this.store, enabled: false, logger: this.log });
 
+        // Sessions/behaviour are "motion" (they exist only because a person was
+        // seen); the recorder they spawn is ffmpeg process noise, which is its
+        // own category so it doesn't drown out the motion story either.
+        const motionLog = categoryLogger(this.log, "motion");
+        const recordingLog = categoryLogger(this.log, "recording");
+
         this.sessionManager = new SessionManager({
             store: this.store,
             settings: this.settings,
             clipsRoot: this.clipsRoot,
             storage: this.storage,
-            recorderFactory: (cam, opts) => new Recorder({ cam, ...opts }),
+            recorderFactory: (cam, opts) => new Recorder({ cam, ...opts, logger: recordingLog }),
             getCam: (camId) => this.getCam(camId),
             getZones: (camId) => this.zonesFor(camId),
             onBehaviorChange: (camId, state) => this._onBehaviorChange(camId, state),
             onEventFinalized: (event) => this._onEventFinalized(event),
-            logger: this.log
+            logger: motionLog
         });
 
         this.settings.subscribe((changed, scope) => this._onSettingsChanged(changed, scope));
@@ -233,6 +251,45 @@ class HubServer {
             await new Promise((resolve) => this.server.close(() => resolve()));
             this.server = null;
         }
+    }
+
+    // ==================================================================
+    //  Hub-level info + control
+    // ==================================================================
+
+    info () {
+        return {
+            version: HUB_VERSION,
+            pid: process.pid,
+            node_version: process.version,
+            platform: process.platform,
+            uptime_s: Math.round(process.uptime()),
+            port: this.hubPort,
+            cams: this.cams.size,
+            detection_enabled: this.detectionEnabled,
+            log_level: this.settings ? this.settings.get("system.logLevel") : null,
+            store_ok: !this.storeError
+        };
+    }
+
+    /**
+     * Voluntary restart, e.g. from the dashboard's "Restart hub" button.
+     *
+     * There's no in-process way to restart a Node service — the trick is to
+     * shut down cleanly and exit with a non-zero code, which is exactly what
+     * `Restart=on-failure` (systemd) and `KeepAlive.SuccessfulExit: false`
+     * (macOS launchd) already watch for, so the process manager brings it
+     * straight back. Logging *why* first matters: without it, this restart
+     * would show up in system.log looking exactly like an unexplained crash.
+     */
+    async restart (reason) {
+        this.log.warn(`[hub] restart requested (${reason || "unknown"}); exiting so the service manager restarts it`);
+        try {
+            await this.stop();
+        } catch (err) {
+            this.log.error(`[hub] restart: shutdown error: ${err && err.message}`);
+        }
+        process.exit(1);
     }
 
     // ==================================================================
@@ -481,7 +538,7 @@ class HubServer {
             detectionCfg: this.detectionCfg,
             onObservation: (obs) => this._onDetection(obs),
             isSessionActive: (camId) => this.sessionManager.isActive(camId),
-            logger: this.log
+            logger: categoryLogger(this.log, "motion")
         });
 
         const result = await this.detector.start();
@@ -663,6 +720,10 @@ class HubServer {
 
     _onSettingsChanged (changed, scope) {
         if (this.storage) this.storage.onSettingsChanged(changed);
+
+        if (changed.includes("system.logLevel") && typeof this.log.setLevel === "function") {
+            this.log.setLevel(this.settings.get("system.logLevel"));
+        }
 
         // Pre-roll depth and frame rate change the ring buffer's shape, so a
         // saved setting has to reach the buffers that are already allocated.

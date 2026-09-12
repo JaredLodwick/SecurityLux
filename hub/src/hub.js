@@ -52,7 +52,12 @@ const DEFAULT_CONFIG = {
         clipsRoot: "~/Videos/SecurityLux",
         dbPath: "~/.securityluxhub/events.db"
     },
-    logging: { level: "info" }
+    logging: {
+        level: "info",
+        dir: "~/.securityluxhub/logs",
+        maxFileSizeMb: 10,
+        maxBackupFiles: 3
+    }
 };
 
 function deepMerge(base, overlay) {
@@ -97,9 +102,35 @@ function loadConfig() {
     return deepMerge(DEFAULT_CONFIG, parsed || {});
 }
 
+/**
+ * Node's own defaults for these are a bare stack trace on stderr (uncaught
+ * exception) or, on newer Node, a crash with almost nothing printed at all
+ * (unhandled rejection). Both are exactly the "hub just stopped and I don't
+ * know why" case this exists to prevent — so log the cause loudly, to the
+ * system category, before doing what Node would have done anyway (exit
+ * non-zero; systemd's `Restart=on-failure` brings it back).
+ */
+function installCrashLogging() {
+    process.on("uncaughtException", (err) => {
+        log.error(`uncaught exception: ${err && err.stack || err}`);
+        process.exit(1);
+    });
+    process.on("unhandledRejection", (reason) => {
+        log.error(`unhandled rejection: ${reason && reason.stack || reason}`);
+        process.exit(1);
+    });
+}
+
 async function main() {
+    installCrashLogging();
+
     const cfg = loadConfig();
     log.setLevel((cfg.logging && cfg.logging.level) || "info");
+    log.configure({
+        dir: cfg.logging && cfg.logging.dir,
+        maxFileSizeMb: cfg.logging && cfg.logging.maxFileSizeMb,
+        maxBackupFiles: cfg.logging && cfg.logging.maxBackupFiles
+    });
 
     const hub = new HubServer(cfg, log);
     await hub.start();

@@ -204,6 +204,13 @@ for the events dashboard. Config search order:
 | `POST` | `/events/redescribe`      | Body `{"cam": "front"}` — rewrite in bulk after renaming zones. |
 | `DELETE` | `/events/<id>`          | Delete the event and its files. |
 
+### Hub
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET`  | `/hub/info`               | Version, PID, Node version, uptime, camera count, log level, event-store health. |
+| `POST` | `/hub/restart`            | Restarts the hub process — see [§ Controlling the hub](#controlling-the-hub) below. |
+
 ### Settings, storage, detection, profiles
 
 | Method | Path | Purpose |
@@ -269,6 +276,65 @@ appears to do nothing, clear the override in the UI to hand control back.
 Every setting is declared once in `src/settings.js` with its type, bounds,
 and help text; validation, the API, and the UI controls are all derived
 from that one declaration.
+
+## Controlling the hub
+
+The **Settings** page has a **Hub** card (version, uptime, camera count,
+event-store health) with a **Restart hub** button, alongside everything
+the dashboard already had for cameras (toggle, restart, reboot, image
+adjustments, LED test).
+
+A Node process can't restart itself in place, so this works the same way
+the existing camera restart button does: `POST /hub/restart` shuts the
+hub down cleanly (drains sessions, stops recorders, closes the database)
+and exits with a non-zero code, which is exactly what `Restart=on-failure`
+(the systemd unit) and `KeepAlive.SuccessfulExit: false` (the macOS
+LaunchAgent) are watching for — the service manager brings it straight
+back. No install/config change needed for this to work on an existing
+install. The restart is logged to `system.log` first, so it reads as
+"restart requested" rather than looking like an unexplained crash.
+
+Cameras reconnect on their own once the hub is back; live streams and the
+dashboard drop for a few seconds during the restart.
+
+## Logs
+
+Everything the hub logs goes to stdout/stderr, so `journalctl -fu
+security-lux-hub` (Linux) or `tail -f ~/Library/Logs/SecurityLuxHub*.log`
+(macOS) always shows the complete picture, same as before. It's also split
+into per-category files under `logging.dir` (default
+`~/.securityluxhub/logs/`) so a chatty subsystem doesn't bury a rare but
+important line from another one:
+
+| File | What's in it |
+|---|---|
+| `system.log`     | Service lifecycle, camera connect/disconnect and offline detection, storage sweeps/backups, settings changes, HTTP errors — everything that isn't detection or recording. |
+| `motion.log`      | Detector ticks and latency, per-camera sessions starting/ending, tracked behaviour (passing/approaching/dwelling/loitering), door-light stage changes. |
+| `recording.log`   | Event-clip and continuous-recording ffmpeg processes: start/stop, segment writes, and any ffmpeg stderr lines that looked like a real problem. |
+
+```bash
+tail -f ~/.securityluxhub/logs/system.log      # "is anything actually broken"
+tail -f ~/.securityluxhub/logs/motion.log      # "why did/didn't this trigger"
+tail -f ~/.securityluxhub/logs/recording.log   # ffmpeg-side recording issues
+```
+
+Each file rotates once it passes `logging.maxFileSizeMb` (default 10 MB),
+keeping `logging.maxBackupFiles` (default 3) old copies alongside it
+(`system.log.1`, `system.log.2`, …).
+
+`logging.level` (`debug`/`info`/`warn`/`error`) also lives in Settings →
+System as **Log level** and takes effect immediately, no restart — turn on
+`debug` while chasing something, then turn it back down.
+
+**A hub or camera that just stops, with nothing in the log:** a clean
+uncaught exception or unhandled rejection is logged to `system.log` (and
+the journal) before the process exits, so start there. If there's truly
+nothing at the moment it died, suspect something the process itself
+couldn't have logged — most likely the OOM killer (check `dmesg` /
+`journalctl -k` for a `Killed process` line) or a power/SD-card fault on a
+Pi. `systemctl status security-lux-hub` / `camera-node` also shows the
+last exit code and how many times the unit has restarted, which tells you
+whether it's crash-looping versus a one-off.
 
 ## Continuous recording
 

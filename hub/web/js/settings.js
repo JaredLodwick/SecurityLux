@@ -185,7 +185,10 @@
 
     async function renderSettingsPage(container, onSaved) {
         await loadSchema();
-        const { values, overrides } = await api.get("/settings");
+        const [{ values, overrides }, info] = await Promise.all([
+            api.get("/settings"),
+            api.get("/hub/info").catch(() => null)
+        ]);
 
         clear(container);
         container.appendChild(el("div.page-header", [
@@ -196,12 +199,65 @@
                 })
             ])
         ]));
+        if (info) container.appendChild(renderHubCard(info));
         container.appendChild(renderGroups({
             // Storage has its own page; image framing lives behind the gear
             // on the feed, where you can see what you're changing.
             groups: groupsFor("global", ["storage", "image"]),
             values, overrides, onSaved
         }));
+    }
+
+    /** Hub-process info + the controls that act on the process itself, not a setting. */
+    function renderHubCard(info) {
+        const uptime = formatUptime(info.uptime_s);
+        return el("div", { style: { marginBottom: "20px" } }, [
+            el("div.page-header", [
+                el("div.page-header-left", [el("h3", { text: "Hub" })]),
+                el("div.page-header-actions", [
+                    el("button.btn", {
+                        "data-variant": "danger",
+                        text: "Restart hub",
+                        title: "Restarts the hub process. Cameras reconnect automatically; " +
+                               "live streams drop for a few seconds.",
+                        onclick: async (ev) => {
+                            const ok = await confirmAction(
+                                "Restart the hub?",
+                                "Every camera's stream drops for a few seconds while the service " +
+                                "manager brings the hub back. Detection and recording resume once " +
+                                "it does.",
+                                "Restart"
+                            );
+                            if (!ok) return;
+                            ev.target.disabled = true;
+                            try {
+                                await api.post("/hub/restart");
+                                toast("Restart requested — reconnecting shortly…", "ok");
+                            } catch (err) {
+                                toast(err.message, "error");
+                                ev.target.disabled = false;
+                            }
+                        }
+                    })
+                ])
+            ]),
+            el("div.stat-grid", [
+                stat(`v${info.version}`, "Hub version"),
+                stat(uptime, "Uptime"),
+                stat(String(info.cams), "Cameras seen"),
+                stat(info.store_ok ? "OK" : "Unavailable", "Event database")
+            ])
+        ]);
+    }
+
+    function formatUptime(seconds) {
+        if (!Number.isFinite(seconds)) return "—";
+        const days = Math.floor(seconds / 86400);
+        const hours = Math.floor((seconds % 86400) / 3600);
+        const minutes = Math.floor((seconds % 3600) / 60);
+        if (days > 0) return `${days}d ${hours}h`;
+        if (hours > 0) return `${hours}h ${minutes}m`;
+        return `${minutes}m`;
     }
 
     // ---------------------------------------------------------------

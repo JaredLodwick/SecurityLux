@@ -426,6 +426,21 @@ const ROUTES = [
         }
     },
 
+    // ---- Hub (the process itself) --------------------------------------
+    {
+        method: "GET", pattern: /^\/hub\/info$/,
+        handler: ({ hub, res }) => sendJson(res, 200, hub.info())
+    },
+    {
+        method: "POST", pattern: /^\/hub\/restart$/,
+        handler: ({ hub, res }) => {
+            // Answer before tearing anything down — the client can't read a
+            // response from a process that already exited.
+            sendJson(res, 202, { ok: true, action: "restart" });
+            setTimeout(() => hub.restart("dashboard request"), 250);
+        }
+    },
+
     // ---- Detection (hub-wide) -----------------------------------------
     {
         method: "GET", pattern: /^\/detection$/,

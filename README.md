@@ -435,6 +435,30 @@ problem. **Reboot** restarts the whole Pi and takes about a minute; it
 needs the scoped sudoers rule that `camera_node/install.sh` installs, so
 re-run that installer on the camera if reboot reports a failure.
 
+The hub itself has the same idea, one level up: **Settings** has a **Hub**
+card with a **Restart hub** button, plus the hub's version, uptime, and
+event-database health. See
+[`hub/README.md` § Controlling the hub](hub/README.md#controlling-the-hub).
+
+### Where are the logs? The hub/camera stopped and I don't see why
+
+Both write to the systemd journal (`journalctl -fu security-lux-hub` /
+`camera-node`; macOS hub: `tail -f ~/Library/Logs/SecurityLuxHub*.log`),
+and the hub additionally splits its own logs into three files under
+`~/.securityluxhub/logs/`: `system.log` (service/connection/storage
+health — what you want for "did it crash and why"), `motion.log`
+(detection and session activity), and `recording.log` (ffmpeg/clip
+issues). See [`hub/README.md` § Logs](hub/README.md#logs) for the
+full breakdown and rotation settings.
+
+If a crash truly left nothing behind — no stack trace, no last log
+line — that itself is a clue: the process didn't get a chance to log
+anything, which usually means something outside it killed the process
+(most often the Linux OOM killer, or an SD-card/power fault on a Pi).
+Check `dmesg` / `journalctl -k` for a `Killed process` line, and
+`systemctl status security-lux-hub` (or `camera-node`) for the exit code
+and restart count.
+
 ### My camera is mounted sideways / the picture is too dark
 
 Click the **gear in the corner of the feed**. Rotation fixes the mounting;
