@@ -340,7 +340,10 @@ whether it's crash-looping versus a one-off.
 
 Off by default. Turn on **Record continuously** (Settings → Continuous
 recording) and each camera gets a long-lived ffmpeg writing rolling segments to
-`<clipsRoot>/continuous/<camId>/`, which the **Timeline** tab scrubs through.
+`<clipsRoot>/continuous/<camId>/`, which the timeline below the feed on the
+**Live** page scrubs through — one merged timeline across every camera on the
+all-cameras grid, or the full scrub-and-save view once you click into a
+single camera.
 
 Two decisions carry the design:
 

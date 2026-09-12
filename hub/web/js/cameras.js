@@ -13,9 +13,17 @@
     "use strict";
 
     const SL = global.SL;
-    const { el, clear, api, toast, confirmAction, formatRelative } = SL;
+    const { el, clear, api, toast, confirmAction, formatRelative, formatClock } = SL;
 
-    const cards = new Map();      // camId -> { root, keeper, refs }
+    const cards = new Map();      // camId -> { root, keeper, refs, frameAt, frameFresh }
+
+    /**
+     * How old the hub's last-received frame can be before the on-feed clock
+     * is treated as stopped rather than live. Matches the age StreamKeeper
+     * itself uses to tell "our connection died" from "the camera is frozen"
+     * (see stream-keeper.js), so the two indicators never disagree.
+     */
+    const FRAME_STALE_MS = 5000;
 
     /** Latest /cams payload, so StreamKeeper can distinguish dead link vs dead camera. */
     let statusByCam = new Map();
@@ -52,7 +60,14 @@
         refs.bboxLayer = el("div.bbox-layer");
         refs.placeholder = el("div.placeholder", { text: "Connecting…" });
 
-        refs.frame = el("div.cam-frame", [keeper.element, refs.badges, refs.bboxLayer]);
+        // The on-feed timestamp. Its text is driven by the frame clock below,
+        // never by a plain ticking Date.now() — that's the whole point: it has
+        // to be able to visibly stop when the feed does.
+        refs.clock = el("span.cam-clock");
+        refs.clockBadges = el("div.cam-badges.cam-badges-bottom", [refs.clock]);
+        refs.clockBadges.style.display = "none";
+
+        refs.frame = el("div.cam-frame", [keeper.element, refs.badges, refs.clockBadges, refs.bboxLayer]);
 
         // Gear in the corner of the feed. Lives on the frame rather than in a
         // page header so the controls open *over the live picture* — you have
@@ -133,9 +148,57 @@
             refs.liveBadge.style.display = "";
         }
 
+        updateFrameClock(entry, cam, shouldStream);
         renderDetection(refs, cam);
         renderFooter(refs, cam);
     }
+
+    /**
+     * Record what the hub actually knows about this camera's last frame, for
+     * the ticker below to paint. `last_frame_at` (added alongside the existing
+     * `last_frame_age_ms` in hub/src/server.js) is the wall-clock instant the
+     * hub received that frame over the websocket — a real, server-observed
+     * timestamp, not anything the browser is guessing at.
+     */
+    function updateFrameClock(entry, cam, shouldStream) {
+        entry.frameAt = shouldStream ? (cam.last_frame_at || null) : null;
+        entry.frameFresh = shouldStream
+            && typeof cam.last_frame_age_ms === "number"
+            && cam.last_frame_age_ms < FRAME_STALE_MS;
+        entry.refs.clockBadges.style.display = entry.frameAt ? "" : "none";
+    }
+
+    /**
+     * Paint every card's clock once a second.
+     *
+     * A single shared interval rather than one per card: the number in view is
+     * a handful of DOM writes either way, and one timer is one fewer thing to
+     * leak if a card is torn down without going through destroy().
+     */
+    function tickClocks() {
+        const now = Date.now();
+        for (const entry of cards.values()) {
+            const { refs } = entry;
+            if (!entry.frameAt) continue;
+
+            // While frames are arriving on schedule, the real time and the
+            // frame time track each other closely enough to show the current
+            // clock. The moment they stop, freeze on the last instant a frame
+            // actually arrived — that's the whole point of this clock: it
+            // can't paper over a wedged feed by ticking anyway.
+            const reading = formatClock(entry.frameFresh ? now : entry.frameAt);
+            if (!reading) continue;
+
+            refs.clock.textContent = entry.frameFresh
+                ? reading.time
+                : `⏸ ${reading.time}`;
+            refs.clock.title = entry.frameFresh
+                ? `${reading.day} ${reading.time}`
+                : `Feed stalled — last frame ${reading.day.toLowerCase() === "today" ? "at" : "on"} ${reading.day} ${reading.time}`;
+            refs.clock.dataset.frozen = String(!entry.frameFresh);
+        }
+    }
+    setInterval(tickClocks, 1000);
 
     function renderDetection(refs, cam) {
         const detection = cam.current_detection;

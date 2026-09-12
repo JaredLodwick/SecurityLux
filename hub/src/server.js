@@ -501,6 +501,12 @@ class HubServer {
             led_available: reported.led_available ?? null,
             uptime_s: reported.uptime_s ?? null,
             last_frame_age_ms: cam.lastJpegAt ? now - cam.lastJpegAt : null,
+            // Wall-clock time the hub actually received the last JPEG, straight
+            // from the ingest path (server.js:onCamSocket) rather than derived
+            // client-side. The dashboard displays this as the on-feed
+            // timestamp so it freezes the instant frames stop arriving, instead
+            // of a client clock that keeps ticking through a hung stream.
+            last_frame_at: cam.lastJpegAt || null,
             current_detection: detectionFresh ? cam.lastDetection : null,
             detection_enabled: this.settings ? this.settings.get("detection.enabled", camId) : true,
             recording_enabled: this.settings ? this.settings.get("recording.enabled", camId) : true,
