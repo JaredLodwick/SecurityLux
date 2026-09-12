@@ -4,16 +4,23 @@
  * Routes are hash-based so deep links and the browser back button work without
  * any server-side routing:
  *
- *   #/live            all cameras
- *   #/live/<camId>    one camera, with its controls, zones, and settings
+ *   #/live            all cameras, with one merged timeline below the grid
+ *   #/live/<camId>    one camera, with its own timeline, controls, zones, and settings
  *   #/events          the event log
  *   #/profiles        people
  *   #/settings        hub-wide settings
  *   #/storage         disk usage and retention limits
  *
+ * There is no separate timeline route: the scrubber lives inline under the
+ * feed it belongs to (see timeline.js), because scrubbing back through
+ * footage is something you do *about* a camera you're looking at, not a
+ * destination of its own.
+ *
  * The poll loop refreshes status and events. It deliberately does *not* rebuild
  * camera cards — those are cached in cameras.js and only mutated in place, so a
- * refresh never disturbs a live MJPEG connection.
+ * refresh never disturbs a live MJPEG connection. The inline timeline gets the
+ * same treatment: it's mounted once per camera selection, not on every poll,
+ * so it never loses a playing clip or an in-progress drag-select underfoot.
  */
 
 (function (global) {
@@ -68,15 +75,16 @@
 
     async function fetchEvents(force) {
         const route = currentRoute();
-        const needsEvents = route.section === "live" || route.section === "events";
-        if (!needsEvents) return;
+        // The Live page shows the timeline, not the event log — it fetches its
+        // own event markers straight from the timeline endpoints. This list is
+        // only for the Events page now.
+        if (route.section !== "events") return;
         if (!force && Date.now() - state.lastEventsFetch < EVENTS_POLL_MS) return;
         // Never tear down a clip the user is watching.
         if (!force && SL.events.isPlaying()) return;
 
-        const camScope = route.section === "live" && route.param ? route.param : null;
         try {
-            state.events = await SL.events.load(camScope);
+            state.events = await SL.events.load();
             state.lastEventsFetch = Date.now();
         } catch (err) {
             if (err.status !== 503) throw err;
@@ -187,7 +195,6 @@
         renderBanners();
 
         switch (route.section) {
-            case "timeline": return renderTimelineView();
             case "events": return renderEventsView();
             case "profiles": return renderProfilesView();
             case "settings": return renderSettingsView();
@@ -214,27 +221,31 @@
             clear(dom.view);
             dom.liveHeader = el("div#live-header");
             dom.liveCameras = el("div#live-cameras");
-            dom.liveEvents = el("div#live-events", { style: { marginTop: "26px" } });
-            dom.view.append(dom.liveHeader, dom.liveCameras, dom.liveEvents);
+            dom.liveTimeline = el("div#live-timeline", { style: { marginTop: "26px" } });
+            dom.view.append(dom.liveHeader, dom.liveCameras, dom.liveTimeline);
+            // Force the block below to (re)mount the timeline even if the
+            // selected camera happens to match what was there before we tore
+            // the container down.
+            dom.liveTimelineFor = undefined;
         }
 
         const selected = SL.resolveSelectedCam(camId, state.cams);
         renderLiveHeader(selected);
         SL.cameras.render(dom.liveCameras, state.cams, selected, (id) => navigate(`live/${encodeURIComponent(id)}`));
 
-        clear(dom.liveEvents);
-        if (state.cams.length) {
-            dom.liveEvents.appendChild(el("div.page-header", [
-                el("div.page-header-left", [
-                    el("h2", { text: selected ? "Recent events" : "Recent events across all cameras" })
-                ]),
-                el("div.page-header-actions", [
-                    el("a.btn", { href: "#/events", text: "View all" })
-                ])
-            ]));
-            const list = el("div");
-            dom.liveEvents.appendChild(list);
-            SL.events.render(list, state.events.slice(0, 15), state.cams);
+        // The timeline owns its own refresh cadence and, in detail mode, a
+        // playing <video> — the 2s status poll must not disturb it, so it's
+        // (re)mounted only when which camera it's scoped to actually changes,
+        // never on every poll tick.
+        const timelineFor = selected || "__all__";
+        if (dom.liveTimelineFor !== timelineFor && state.cams.length) {
+            dom.liveTimelineFor = timelineFor;
+            const mount = selected
+                ? SL.timeline.renderDetail(dom.liveTimeline, state.cams, selected)
+                : SL.timeline.renderDashboard(dom.liveTimeline, state.cams);
+            mount.catch((err) => {
+                clear(dom.liveTimeline).appendChild(el("div.empty", { text: err.message }));
+            });
         }
     }
 
@@ -328,17 +339,6 @@
             ]);
         });
         refresh();
-    }
-
-    function renderTimelineView() {
-        // Rebuilt only on entry: the timeline owns its own refresh cadence and
-        // holds a playing <video>, which the 2 s status poll must not disturb.
-        if (mountedSection === "timeline") return;
-        mountedSection = "timeline";
-        clear(dom.view);
-        SL.timeline.render(dom.view, state.cams).catch((err) => {
-            clear(dom.view).appendChild(el("div.empty", { text: err.message }));
-        });
     }
 
     function renderEventsView() {

@@ -198,6 +198,17 @@ main { max-width: 1340px; margin: 0 auto; padding: 20px 24px 56px; }
 .badge[data-kind="live"] { border-color: var(--accent); color: var(--accent); }
 .badge[data-kind="alert"] { border-color: var(--warn); color: var(--warn); }
 
+.cam-badges-bottom { top: auto; bottom: 8px; }
+.cam-clock {
+  background: rgba(0,0,0,.66); backdrop-filter: blur(3px);
+  border: 1px solid var(--border); border-radius: 4px;
+  padding: 2px 7px; font-size: 0.72rem;
+  color: var(--text); font-variant-numeric: tabular-nums;
+}
+/* The feed has visibly stopped: the clock stops ticking, and says so, rather
+   than a smooth readout papering over a frozen picture. */
+.cam-clock[data-frozen="true"] { border-color: var(--warn); color: var(--warn); }
+
 .cam-footer {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   padding: 8px 12px; font-size: 0.78rem; color: var(--text-muted);
@@ -614,6 +625,10 @@ input.slider:focus-visible { box-shadow: 0 0 0 2px var(--accent-dim); }
   border: 1px solid var(--border); border-radius: 5px;
   overflow: hidden; cursor: crosshair; touch-action: none;
 }
+/* The all-cameras dashboard timeline only ever navigates on click — there's
+   no drag-to-select here, so "crosshair" would promise a precision this mode
+   doesn't have. */
+.timeline-track[data-mode="dashboard"] { cursor: pointer; }
 
 .timeline-coverage {
   position: absolute; top: 0; bottom: 0;

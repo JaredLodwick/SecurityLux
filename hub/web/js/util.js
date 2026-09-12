@@ -127,6 +127,30 @@
         return `${d.toLocaleDateString([], { month: "short", day: "numeric" })} ${time}`;
     }
 
+    /**
+     * A clock reading for an on-feed timestamp overlay: `{ time, day }`, e.g.
+     * `{ time: "8:29:41 AM", day: "Today" }`. Split so a caller can drop the
+     * day when space is tight and show it only when it isn't "Today".
+     */
+    function formatClock(ms) {
+        if (!ms) return null;
+        const d = new Date(ms);
+        const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" });
+
+        const today = new Date();
+        let day;
+        if (d.toDateString() === today.toDateString()) {
+            day = "Today";
+        } else {
+            const yesterday = new Date(today);
+            yesterday.setDate(today.getDate() - 1);
+            day = d.toDateString() === yesterday.toDateString()
+                ? "Yesterday"
+                : d.toLocaleDateString([], { month: "short", day: "numeric" });
+        }
+        return { time, day };
+    }
+
     /** "4 min ago" — for the last-event line and offline durations. */
     function formatRelative(ms) {
         if (!ms) return "—";
@@ -264,7 +288,7 @@
 
     Object.assign(SL, {
         el, clear, appendChildren, resolveSelectedCam,
-        formatBytes, formatDuration, formatTime, formatRelative, capitalize,
+        formatBytes, formatDuration, formatTime, formatClock, formatRelative, capitalize,
         api, toast, modal, confirmAction
     });
 
@@ -273,7 +297,7 @@
     if (typeof module !== "undefined" && module.exports) {
         module.exports = {
             resolveSelectedCam,
-            formatBytes, formatDuration, formatRelative, capitalize
+            formatBytes, formatDuration, formatClock, formatRelative, capitalize
         };
     }
 })(typeof window !== "undefined" ? window : globalThis);

@@ -366,8 +366,8 @@
                 el("div.small.muted", {
                     html: "Continuous recording isn't storing anything yet. Turn on " +
                           "<b>Record continuously</b> below to keep a rolling reel you can " +
-                          'scrub back through on the <a href="#/timeline" ' +
-                          'style="color:var(--accent)">Timeline</a>.'
+                          'scrub back through on the <a href="#/live" ' +
+                          'style="color:var(--accent)">Live</a> page.'
                 })
             ]);
         }
