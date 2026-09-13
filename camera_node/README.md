@@ -202,6 +202,34 @@ On the Pi (or any Linux box with a UVC webcam):
 Config is read from, in order: `$CAMERA_NODE_CONFIG` → `/etc/camera-node/config.yml`
 → `./config.yml` → built-in defaults.
 
+### If the picture freezes
+
+A USB webcam can wedge — `cap.read()` starts returning failure — without the
+device disappearing or the process crashing. Because the WebSocket's status
+heartbeat (`_status_loop`) is independent of the frame loop, the connection
+to the hub stays open and the hub keeps reporting the camera "connected"
+even though no new pixels are arriving; the hub's dashboard flags this on
+the feed itself with a `⏸ <time>` badge showing when the last real frame
+landed (see `hub/README.md` § Logs).
+
+`CameraManager`'s capture loop handles this itself: after
+`DEVICE_REOPEN_AFTER_S` (5s) of failed reads it releases and reopens the
+V4L2 device — the usual fix for a wedged USB webcam — retrying on a 10s
+backoff if that also fails. Every stall is logged (`No frame from <device>
+for Ns`), so `journalctl -fu camera-node` shows it happening rather than
+staying silent, which is what made this hard to diagnose before. If the
+device won't reopen at all, the feed falls back to the mock frame (visibly
+labeled "MOCK CAMERA") rather than freezing outright, so a hardware fault
+stays obvious on the live view instead of looking like a healthy picture
+that just stopped moving.
+
+If reopening never succeeds and the mock frame persists, that points to
+something below `camera_node`'s control — a dying USB cable/hub, insufficient
+power to the Pi Zero 2 W (a flaky 5V rail is a very common cause of USB
+device dropouts), or the kernel's V4L2 driver itself needing the device
+node re-enumerated (unplug/replug, or `sudo systemctl restart camera-node`
+from the dashboard's **Restart**).
+
 ## Deploying to the Pi
 
 The fast path: clone the repo on the camera Pi and run the installer.
@@ -254,10 +282,10 @@ pip install -r requirements.txt
 pytest
 ```
 
-119 tests exercising the config loader, the state machine, the PiSugar
+123 tests exercising the config loader, the state machine, the PiSugar
 parsers/client, the door light's animation maths and TTL expiry, the image
-transforms, and the V4L2 control parser — no hardware, no SPI bus, no webcam
-and no hub required.
+transforms, the V4L2 control parser, and the capture loop's stall-detection
+and reopen logic — no hardware, no SPI bus, no webcam and no hub required.
 
 The LED tests deliberately run with no Adafruit libraries installed and the
 control tests with no `v4l2-ctl` present, which is also how we check that a

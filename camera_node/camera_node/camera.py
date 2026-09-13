@@ -41,6 +41,19 @@ class CameraConfig:
     jpeg_quality: int = 70
 
 
+# How often to re-log while the device is stuck (so a wedged webcam doesn't
+# spam the log every ~50ms forever, but also doesn't stay silent).
+STALL_LOG_INTERVAL_S = 2.0
+# How long a real device gets to recover on its own before we release and
+# reopen the handle. A wedged USB webcam often only comes back with a fresh
+# handle — retrying reads on the same one can spin forever with nothing to
+# show for it.
+DEVICE_REOPEN_AFTER_S = 5.0
+# Backoff between reopen attempts once one has been tried, so a device stuck
+# in a bad state doesn't get hammered with open/close calls every iteration.
+DEVICE_REOPEN_RETRY_S = 10.0
+
+
 class CameraManager:
     """Owns the capture thread and exposes the latest JPEG frame.
 
@@ -186,32 +199,77 @@ class CameraManager:
     def _capture_loop(self) -> None:
         """Thread target. Opens device (or mock), captures, encodes, stores."""
         capture = self._open_device()
-        self._using_mock = capture is None
+        # Whether this run was ever backed by real hardware, as opposed to
+        # the dev-machine "no /dev/video0 at all" case — only the former is
+        # worth periodically retrying forever. The latter is expected and
+        # would otherwise retry-and-log pointlessly on every laptop dev run.
+        expect_real_device = capture is not None
+        self._using_mock = not expect_real_device
         if self._using_mock:
             log.warning("Using mock camera")
 
         frame_interval = 1.0 / max(self._cfg.fps, 1)
+        last_frame_at = time.monotonic()
+        last_stall_log_at = 0.0
+        next_reopen_at = 0.0
 
         try:
             while not self._stop_event.is_set():
                 loop_start = time.monotonic()
+
+                # `capture` can be None here if a previous reopen attempt
+                # failed (see `_reopen_device`) — keep trying, on a backoff,
+                # rather than falling back to the mock frame permanently.
+                if expect_real_device and capture is None and loop_start >= next_reopen_at:
+                    capture = self._reopen_device(capture)
+                    next_reopen_at = loop_start + DEVICE_REOPEN_RETRY_S
+                    if capture is not None:
+                        last_frame_at = loop_start
+
                 frame = self._grab_frame(capture)
                 if frame is None:
-                    # Real device returned nothing — short sleep and retry.
+                    # `_grab_frame` only returns None for a real device that
+                    # failed to read a frame — the mock source always
+                    # succeeds — so this means the hardware is stuck, not
+                    # just "no frame ready yet". This used to retry silently
+                    # forever with nothing in the log to show for it.
+                    stalled_for = loop_start - last_frame_at
+                    if stalled_for >= STALL_LOG_INTERVAL_S \
+                            and loop_start - last_stall_log_at >= STALL_LOG_INTERVAL_S:
+                        log.warning(
+                            "No frame from %s for %.1fs (device read failing)",
+                            self._cfg.device, stalled_for,
+                        )
+                        last_stall_log_at = loop_start
+                    if stalled_for >= DEVICE_REOPEN_AFTER_S and loop_start >= next_reopen_at:
+                        capture = self._reopen_device(capture)
+                        next_reopen_at = loop_start + DEVICE_REOPEN_RETRY_S
+                        last_frame_at = loop_start
                     time.sleep(0.05)
                     continue
+
+                last_frame_at = loop_start
 
                 # Adjustments happen here, before the encode, so the live feed,
                 # the hub's recordings, and the detector all see the same
                 # corrected image. `apply` short-circuits when nothing is set,
                 # so an unadjusted camera pays nothing.
-                frame = imaging.apply(frame, self._image)
-
-                ok, buf = cv2.imencode(
-                    ".jpg",
-                    frame,
-                    [int(cv2.IMWRITE_JPEG_QUALITY), int(self._cfg.jpeg_quality)],
-                )
+                #
+                # Both of these are wrapped: an exception here used to escape
+                # the loop entirely and silently kill the capture thread —
+                # `is_available()` would then report the camera as gone, with
+                # nothing logged beyond Python's own unraisable-thread-exception
+                # printout, and no further attempt to recover.
+                try:
+                    frame = imaging.apply(frame, self._image)
+                    ok, buf = cv2.imencode(
+                        ".jpg",
+                        frame,
+                        [int(cv2.IMWRITE_JPEG_QUALITY), int(self._cfg.jpeg_quality)],
+                    )
+                except Exception:
+                    log.exception("Frame processing failed; skipping this frame")
+                    continue
                 if not ok:
                     log.warning("cv2.imencode failed; skipping frame")
                     continue
@@ -254,6 +312,31 @@ class CameraManager:
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._cfg.height)
         cap.set(cv2.CAP_PROP_FPS, self._cfg.fps)
         return cap
+
+    def _reopen_device(self, capture):
+        """Release and reopen the V4L2 device after it stops returning frames.
+
+        Falls back to the mock frame source (which visibly labels itself, so
+        the hardware problem stays obvious on the live feed rather than
+        looking like a healthy but frozen picture) if the reopen itself
+        fails; the caller keeps retrying on a backoff either way.
+        """
+        if capture is not None:
+            try:
+                capture.release()
+            except Exception:  # pragma: no cover
+                log.exception("Error releasing VideoCapture before reopen")
+
+        new_capture = self._open_device()
+        if new_capture is None:
+            log.error(
+                "Failed to reopen %s; serving the mock frame until it recovers",
+                self._cfg.device,
+            )
+        else:
+            log.info("Reopened %s successfully", self._cfg.device)
+        self._using_mock = new_capture is None
+        return new_capture
 
     def _grab_frame(self, capture) -> Optional[np.ndarray]:
         if capture is None:
